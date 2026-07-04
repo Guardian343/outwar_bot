@@ -68,7 +68,7 @@ class OutwarSession:
             raise LoginError(f"Network error during login: {e}")
 
         if "Invalid username" in content or "login_username" in content:
-            raise LoginError("Outwar login failed — check username and password in config.json")
+            raise LoginError("Outwar login failed — check OUTWAR_USERNAME and OUTWAR_PASSWORD in .env")
 
         # Extract session ID from redirect URL or cookie
         try:
