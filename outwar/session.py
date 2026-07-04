@@ -1,0 +1,255 @@
+import re
+import aiohttp
+import asyncio
+
+BASE_URL  = "https://sigil.outwar.com"
+LOGIN_URL = "http://sigil.outwar.com/index.php"
+
+
+class LoginError(Exception):
+    """Raised when Outwar login fails."""
+    pass
+
+
+class OutwarSession:
+    """Shared HTTP session for the main bot account."""
+
+    def __init__(self):
+        self._session:      aiohttp.ClientSession = None
+        self.session_id:    str = None
+        self.user_id:       int = None
+        self._username:     str = None
+        self._password:     str = None
+        self._relogin_lock  = asyncio.Lock()
+        self.on_relogin     = None
+        self._last_login    = None
+
+    async def login(self, username: str, password: str):
+        self._username = username
+        self._password = password
+        if self._session:
+            await self._session.close()
+        self._session = aiohttp.ClientSession()
+        await self._do_login()
+
+    async def _do_login(self):
+        data = {"login_username": self._username, "login_password": self._password}
+        try:
+            async with self._session.post(LOGIN_URL, data=data) as resp:
+                content = await resp.text()
+                final_url = str(resp.url)
+        except Exception as e:
+            raise LoginError(f"Network error during login: {e}")
+
+        if "Invalid username" in content or "login_username" in content:
+            raise LoginError("Outwar login failed — check username and password in config.json")
+
+        # Extract session ID from redirect URL or cookie
+        try:
+            self.session_id = self._extract(content, "rg_sess_id=", 32)
+        except (ValueError, IndexError):
+            # Try from cookie
+            cookies = self._session.cookie_jar.filter_cookies("https://sigil.outwar.com")
+            sess_cookie = cookies.get("rg_sess_id")
+            if sess_cookie:
+                self.session_id = sess_cookie.value[:32]
+            else:
+                raise LoginError("Could not extract session ID — login may have failed.")
+
+        # Extract user_id from redirect URL
+        try:
+            m = re.search(r"suid=(\d+)", final_url)
+            if m:
+                self.user_id = int(m.group(1))
+            else:
+                user_id_str = self._extract_until(content, "owchar=", "&")
+                self.user_id = int(user_id_str)
+        except (ValueError, TypeError):
+            self.user_id = 0
+
+        print(f"Got user_id from redirect: {self.user_id}")
+        print(f"Got session ID from cookie: {self.session_id[:8]}...")
+        from datetime import datetime, timezone
+        self._last_login = datetime.now(timezone.utc)
+
+    def _is_logged_out(self, html: str) -> bool:
+        """Detect if the response is a login redirect / session expired."""
+        return (
+            "login_username" in html or
+            "login_password" in html or
+            ("Please login" in html and "rg_sess_id" not in html)
+        )
+
+    async def _relogin_if_needed(self, html: str) -> bool:
+        """Re-login if session has expired. Returns True if re-login happened."""
+        if not self._is_logged_out(html):
+            return False
+        async with self._relogin_lock:
+            try:
+                print("Session expired — re-logging in...")
+                await self._do_login()
+                print("Re-login successful.")
+                if self.on_relogin:
+                    await self.on_relogin(success=True)
+                return True
+            except Exception as e:
+                print(f"Re-login failed: {e}")
+                if self.on_relogin:
+                    await self.on_relogin(success=False, error=str(e))
+                return False
+
+    # ── Internal retry helper ────────────────────────────────────────────────
+    async def _request_with_retry(
+        self,
+        method: str,
+        url: str,
+        *,
+        data: dict = None,
+        cookies: dict = None,
+        max_attempts: int = 25,
+        timeout_secs: float = 60.0,
+    ) -> str:
+        """
+        Fire a GET or POST with up to max_attempts retries.
+        Backs off on errors: 1s, 2s, 4s, 8s… capped at 30s.
+        Detects rate limits and session expiry and handles both.
+        """
+        timeout = aiohttp.ClientTimeout(total=timeout_secs)
+        last_error = None
+
+        for attempt in range(max_attempts):
+            try:
+                kwargs = {"timeout": timeout}
+                if cookies:
+                    kwargs["cookies"] = cookies
+                if method == "POST":
+                    kwargs["data"] = data or {}
+                    cm = self._session.post(url, **kwargs)
+                else:
+                    cm = self._session.get(url, **kwargs)
+
+                async with cm as resp:
+                    html = await resp.text()
+
+                # Rate limit — back off and retry
+                html_lower = html.lower()
+                if any(p in html_lower for p in ("too many requests", "rate limit", "slow down")):
+                    wait = min(30.0, 2.0 ** attempt)
+                    print(f"[SESSION] Rate limit on {url} attempt {attempt+1} — waiting {wait:.0f}s")
+                    await asyncio.sleep(wait)
+                    continue
+
+                # Session expired — re-login then retry
+                if self._is_logged_out(html):
+                    await self._relogin_if_needed(html)
+                    continue
+
+                return html
+
+            except asyncio.TimeoutError:
+                last_error = "timeout"
+            except aiohttp.ClientError as e:
+                last_error = str(e)
+            except Exception as e:
+                last_error = str(e)
+
+            wait = min(30.0, 2.0 ** attempt)
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(wait)
+
+        print(f"[SESSION] All {max_attempts} attempts failed for {url}: {last_error}")
+        return ""
+
+    async def get(self, path: str) -> str:
+        url = f"{BASE_URL}/{path.lstrip('/')}"
+        return await self._request_with_retry("GET", url)
+
+    async def get_as(self, path: str, suid: int) -> str:
+        """GET as a specific trustee without mutating the shared cookie jar."""
+        url = f"{BASE_URL}/{path.lstrip('/')}"
+        return await self._request_with_retry("GET", url, cookies={"ow_userid": str(suid)})
+
+    async def post_as(self, path: str, data: dict, suid: int) -> str:
+        """POST as a specific trustee without mutating the shared cookie jar."""
+        url = f"{BASE_URL}/{path.lstrip('/')}"
+        return await self._request_with_retry("POST", url, data=data, cookies={"ow_userid": str(suid)})
+
+    async def post(self, path: str, data: dict) -> str:
+        url = f"{BASE_URL}/{path.lstrip('/')}"
+        return await self._request_with_retry("POST", url, data=data)
+
+    async def get_sse(self, path: str, timeout_secs: int = 3600) -> str:
+        """
+        Fetch an SSE endpoint with an extended timeout and graceful handling
+        of TransferEncodingError — the loot data is usually complete by the
+        time the error fires (it happens on the final keepalive chunk).
+        Returns whatever data was received even on a partial-transfer error.
+        """
+        url = f"{BASE_URL}/{path.lstrip('/')}"
+        timeout = aiohttp.ClientTimeout(total=timeout_secs)
+        try:
+            async with self._session.get(url, timeout=timeout) as resp:
+                try:
+                    data = await resp.text()
+                except aiohttp.TransferEncodingError:
+                    data = resp.content._buffer.decode("utf-8", errors="replace") \
+                           if hasattr(resp.content, "_buffer") else ""
+                except Exception:
+                    data = ""
+        except aiohttp.TransferEncodingError:
+            raise
+        return data
+
+    async def close(self):
+        if self._session:
+            await self._session.close()
+
+    @staticmethod
+    def _extract(content: str, search: str, length: int) -> str:
+        idx = content.index(search) + len(search)
+        return content[idx: idx + length]
+
+    @staticmethod
+    def _extract_until(content: str, search: str, end: str) -> str:
+        idx = content.index(search) + len(search)
+        end_idx = content.index(end, idx)
+        return content[idx:end_idx]
+
+
+class AccountSession:
+    """Per-trustee HTTP session (each account has its own cookies/session)."""
+
+    def __init__(self, name: str, suid: int, level: int, crew: str, rage: int, url: str):
+        self.name   = name
+        self.suid   = suid
+        self.level  = level
+        self.crew   = crew
+        self.rage   = rage
+        self.url    = url
+        self.has_md      = False
+        self.is_active   = False
+        self.in_cooldown = False
+        self._session: aiohttp.ClientSession = None
+        self._logged_in  = False
+
+    async def login(self, username: str, password: str):
+        self._session = aiohttp.ClientSession()
+        data = {"login_username": username, "login_password": password}
+        async with self._session.post(LOGIN_URL, data=data) as resp:
+            content = await resp.text()
+        self._logged_in = True
+        return content
+
+    async def get(self, path: str) -> str:
+        url = f"{BASE_URL}/{path.lstrip('/')}"
+        async with self._session.get(url) as resp:
+            return await resp.text()
+
+    async def post(self, path: str, data: dict) -> str:
+        url = f"{BASE_URL}/{path.lstrip('/')}"
+        async with self._session.post(url, data=data) as resp:
+            return await resp.text()
+
+    async def close(self):
+        if self._session:
+            await self._session.close()

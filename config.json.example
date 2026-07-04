@@ -1,0 +1,9 @@
+{
+  "prefix": "?",
+  "token": "YOUR_DISCORD_BOT_TOKEN",
+  "channel": 123456789012345678,
+  "logchannel": 123456789012345678,
+  "godchannel": 123456789012345678,
+  "username": "YOUR_OUTWAR_USERNAME",
+  "password": "YOUR_OUTWAR_PASSWORD"
+}

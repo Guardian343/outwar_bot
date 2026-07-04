@@ -1,0 +1,28 @@
+# ── Live runtime data — NEVER commit (trustees, sessions, settings, tokens) ──
+database/
+config.json
+config*.json
+*.session
+*.token
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# ── Editor / OS ──
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# ── Local build artifacts ──
+*.log
+outwar_bot.zip
+loot_debug.html
