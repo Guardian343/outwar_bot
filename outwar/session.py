@@ -5,6 +5,32 @@ import asyncio
 BASE_URL  = "https://sigil.outwar.com"
 LOGIN_URL = "http://sigil.outwar.com/index.php"
 
+# Default cap on simultaneous connections to sigil. Prevents bursting too many
+# requests at once (the rate-limit trigger). Tunable live via settings.json
+# "host_connection_limit". All account traffic shares one session, so this is a
+# GLOBAL throttle across every code path (slayer nav, boss joins, monitors).
+DEFAULT_HOST_LIMIT = 10
+
+
+def _build_session(quiet: bool = False) -> aiohttp.ClientSession:
+    """aiohttp session with a per-host connection cap (Freak's rate-limit fix)."""
+    limit = DEFAULT_HOST_LIMIT
+    try:
+        from outwar import database as db
+        limit = int(db.get_settings().get("host_connection_limit", DEFAULT_HOST_LIMIT))
+    except Exception:
+        pass
+    limit = max(1, limit)
+    connector = aiohttp.TCPConnector(
+        limit=limit,            # total simultaneous connections
+        limit_per_host=limit,   # per-host cap — the throttle that actually matters
+        ttl_dns_cache=300,      # cache DNS so we're not re-resolving every request
+        enable_cleanup_closed=True,
+    )
+    if not quiet:
+        print(f"[SESSION] HTTP connector: limit_per_host={limit}")
+    return aiohttp.ClientSession(connector=connector)
+
 
 class LoginError(Exception):
     """Raised when Outwar login fails."""
@@ -29,7 +55,7 @@ class OutwarSession:
         self._password = password
         if self._session:
             await self._session.close()
-        self._session = aiohttp.ClientSession()
+        self._session = _build_session()
         await self._do_login()
 
     async def _do_login(self):
@@ -233,7 +259,7 @@ class AccountSession:
         self._logged_in  = False
 
     async def login(self, username: str, password: str):
-        self._session = aiohttp.ClientSession()
+        self._session = _build_session(quiet=True)
         data = {"login_username": username, "login_password": password}
         async with self._session.post(LOGIN_URL, data=data) as resp:
             content = await resp.text()
