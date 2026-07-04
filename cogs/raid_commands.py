@@ -1694,10 +1694,19 @@ class RaidCommands(commands.Cog):
             former_suid = None
             god_seen     = False   # god mob present in the room (even if capped)
             room_reached = False   # a scout actually reached the god's room
-            # Target god's mob id — form ONLY on this mob, not the first formable one.
-            # Shared rooms hold 2+ raidable gods; without this the bot forms on the
-            # wrong one and logs a false LOSE. Empty -> fall back to first-formable.
-            _target_mid = str(mob.get("mob_id") or "")
+            # Target god's NAME is the authoritative identifier. Mobs.txt mob_ids are
+            # NOT reliable (e.g. Freezebreed is 1288 live but 944 in Mobs.txt), so we
+            # identify the room entry by name and form using THAT entry's own live
+            # mobId/h. Shared rooms hold 2+ gods; name-match forms on the right one.
+            _target_name = (mob.get("name") or "").strip().lower()
+
+            def _find_target(details):
+                """Return the roomDetailsNew entry whose name matches our target god."""
+                for m in details:
+                    if (m.get("type") == 1
+                            and (m.get("name") or "").strip().lower() == _target_name):
+                        return m
+                return None
 
             async def _navigate(t, try_as_former=False):
                 nonlocal form_url, former, former_suid, god_seen, room_reached
@@ -1714,21 +1723,15 @@ class RaidCommands(commands.Cog):
 
                         if cur_room == room_id:
                             room_reached = True
-                            for m in loc.get("roomDetailsNew", []):
-                                if m.get("type") == 1 and (not _target_mid
-                                        or str(m.get("mobId")) == _target_mid):
-                                    god_seen = True   # OUR target god present (spawned)
-                            if try_as_former and not form_url:
-                                for m in loc.get("roomDetailsNew", []):
-                                    if (m.get("type") == 1 and m.get("canForm")
-                                            and (not _target_mid
-                                                 or str(m.get("mobId")) == _target_mid)):
-                                        mid = m.get("mobId")
-                                        h   = m.get("h", "")
-                                        if mid:
-                                            form_url    = f"formraid.php?target=M{mid}&h={h}"
-                                            former      = t
-                                            former_suid = suid
+                            _m = _find_target(loc.get("roomDetailsNew", []))
+                            if _m:
+                                god_seen = True   # OUR target god present (spawned)
+                                if try_as_former and not form_url and _m.get("canForm"):
+                                    _mid = _m.get("mobId")
+                                    if _mid:
+                                        form_url    = f"formraid.php?target=M{_mid}&h={_m.get('h','')}"
+                                        former      = t
+                                        former_suid = suid
                             return
 
                         if not cur_room:
@@ -1748,16 +1751,15 @@ class RaidCommands(commands.Cog):
 
                         if last_data:
                             room_reached = True
-                            for m in last_data.get("roomDetailsNew", []):
-                                if m.get("type") == 1 and (not _target_mid
-                                        or str(m.get("mobId")) == _target_mid):
-                                    god_seen = True
-                        if last_data and try_as_former and not form_url:
-                            for m in last_data.get("roomDetailsNew", []):
-                                if (m.get("type") == 1 and m.get("canForm")
-                                        and (not _target_mid
-                                             or str(m.get("mobId")) == _target_mid)):
-                                    mid = m.get("mobId")
+                            _m = _find_target(last_data.get("roomDetailsNew", []))
+                            if _m:
+                                god_seen = True
+                                if try_as_former and not form_url and _m.get("canForm"):
+                                    _mid = _m.get("mobId")
+                                    if _mid:
+                                        form_url    = f"formraid.php?target=M{_mid}&h={_m.get('h','')}"
+                                        former      = t
+                                        former_suid = suid
                                     h   = m.get("h", "")
                                     if mid:
                                         form_url    = f"formraid.php?target=M{mid}&h={h}"
