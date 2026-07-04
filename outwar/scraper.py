@@ -1388,3 +1388,41 @@ def room_to_area_map() -> dict:
         pass
     _AREA_MAP_CACHE = m
     return m
+
+
+def parse_join_limits(html: str):
+    """Parse a slayer god's join page for its party size limits.
+    Looks for 'Minimum: 20 , Maximum 60' -> (20, 60). Returns (min, max) or None.
+    These are the MIN accounts needed to launch and the MAX that can join — NOT
+    prime-god raid caps (a different game mechanic)."""
+    import re
+    if not html:
+        return None
+    m = re.search(r"Minimum:\s*(\d+)\s*,\s*Maximum\s*(\d+)", html, re.I)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    return None
+
+
+def size_slayer_roster(needers, non_needers, max_join, min_join=0, scores=None):
+    """Choose which accounts to send to a slayer god, given its join limits.
+    - Fill toward MAX with needers first (they get the completion), then backfill
+      with the strongest non-needers (by `scores` if given, else existing order).
+    - Never exceed max_join; if the total is below min_join the raid can't launch,
+      so backfill up to at least min_join even if it means extra non-needers.
+    Returns the sized roster (list of trustee dicts)."""
+    if max_join is None or max_join <= 0:
+        return needers + non_needers          # no known limit -> send everyone (today's behaviour)
+
+    roster = list(needers[:max_join])         # needers first, capped at max
+    remaining = [t for t in non_needers if t not in roster]
+    if scores:
+        remaining.sort(key=lambda t: -scores.get(t.get("name"), 0.0))
+    # Backfill toward max (protects win rate for small crews — fill to max, not min)
+    for t in remaining:
+        if len(roster) >= max_join:
+            break
+        roster.append(t)
+    # Ensure we can at least launch (reach min); needers may already exceed max
+    # in which case min is moot. Only matters when roster < min_join.
+    return roster
