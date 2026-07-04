@@ -1692,9 +1692,11 @@ class RaidCommands(commands.Cog):
             form_url   = None
             former     = None
             former_suid = None
+            god_seen     = False   # god mob present in the room (even if capped)
+            room_reached = False   # a scout actually reached the god's room
 
             async def _navigate(t, try_as_former=False):
-                nonlocal form_url, former, former_suid
+                nonlocal form_url, former, former_suid, god_seen, room_reached
                 suid = t.get("suid")
                 async with nav_semaphore:
                     try:
@@ -1707,6 +1709,10 @@ class RaidCommands(commands.Cog):
                         cur_room = int(loc.get("curRoom", 0))
 
                         if cur_room == room_id:
+                            room_reached = True
+                            for m in loc.get("roomDetailsNew", []):
+                                if m.get("type") == 1:   # god mob present (spawned)
+                                    god_seen = True
                             if try_as_former and not form_url:
                                 for m in loc.get("roomDetailsNew", []):
                                     if m.get("type") == 1 and m.get("canForm"):
@@ -1733,6 +1739,11 @@ class RaidCommands(commands.Cog):
                                 except Exception:
                                     pass
 
+                        if last_data:
+                            room_reached = True
+                            for m in last_data.get("roomDetailsNew", []):
+                                if m.get("type") == 1:
+                                    god_seen = True
                         if last_data and try_as_former and not form_url:
                             for m in last_data.get("roomDetailsNew", []):
                                 if m.get("type") == 1 and m.get("canForm"):
@@ -1749,9 +1760,17 @@ class RaidCommands(commands.Cog):
                 await _navigate(candidate, try_as_former=True)
                 if form_url:
                     break
+                # Not-spawned short-circuit: a scout reached the room but the god
+                # mob isn't there -> it's dead/not spawned. Skip immediately instead
+                # of walking every account to an empty room.
+                if room_reached and not god_seen:
+                    return False, 0, "not spawned"
 
             if not form_url:
-                return False, 0, f"{mob['name']} is not spawned or could not be found in room {room_id}."
+                # Reached the god but couldn't form -> spawned but capped/full.
+                if god_seen:
+                    return False, 0, "capped — could not form"
+                return False, 0, "not spawned"
 
 
             others = [t for t in sorted_trustees if t.get("suid") != former_suid]
