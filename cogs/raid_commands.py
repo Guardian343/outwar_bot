@@ -1760,11 +1760,6 @@ class RaidCommands(commands.Cog):
                                         form_url    = f"formraid.php?target=M{_mid}&h={_m.get('h','')}"
                                         former      = t
                                         former_suid = suid
-                                    h   = m.get("h", "")
-                                    if mid:
-                                        form_url    = f"formraid.php?target=M{mid}&h={h}"
-                                        former      = t
-                                        former_suid = suid
                     except Exception as e:
                         print(f"Navigation error for {t.get('name')}: {e}")
 
