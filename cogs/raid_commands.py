@@ -1778,6 +1778,24 @@ class RaidCommands(commands.Cog):
                 return False, 0, "Could not extract raid ID."
             raidid = raidid_match.group(1)
 
+            # Learn this god's join limits (min/max joiners) once, from the raid
+            # page — saved to join_limits.json and reused to size future rosters.
+            _alias = mob.get("alias")
+            if _alias and _alias not in db.get_join_limits():
+                try:
+                    from outwar.scraper import parse_join_limits
+                    _raid_page = await session.get_as(raid_url, former_suid)
+                    _lim = parse_join_limits(_raid_page)
+                    if _lim:
+                        db.set_join_limit(_alias, _lim[0], _lim[1])
+                        print(f"[SLAYER] Learned join limits for {mob['name']}: "
+                              f"{_lim[0]}-{_lim[1]} (saved)")
+                    else:
+                        print(f"[SLAYER] Could not parse join limits for {mob['name']} "
+                              f"— will size on next encounter")
+                except Exception as _e:
+                    print(f"[SLAYER] Join-limit learn error for {mob['name']}: {_e}")
+
             # Join concurrently
             join_semaphore = asyncio.Semaphore(10)
             joiners = [t for t in sorted_trustees if t.get("suid") and t.get("suid") != former_suid]
@@ -2135,18 +2153,33 @@ class RaidCommands(commands.Cog):
 
         results = []
         wins = 0
+        join_limits = db.get_join_limits()   # learned min/max joiners per god
+        from outwar.scraper import size_slayer_roster
         for i, (tgt, needers) in enumerate(plan, 1):
             if self._slayer_stop:
                 break
             # One message per god: post "Raiding X…", then edit THAT line to the result.
             line = await ctx.send(f"⚔️ Raiding **{tgt['name']}** with **{crew}**…")
             non = [t for t in trustees if t not in needers]
-            roster = needers + non   # needers first, then backfill for damage
-            mob = {"name": tgt["name"], "mob_id": tgt["mob_id"], "room_id": tgt["room"]}
+            # Roster-sizing: if we've learned this god's join limits, send only enough
+            # to fill toward MAX (needers first, then backfill) — avoids walking the
+            # whole roster to a small-party god. Unknown limits -> send all, learn below.
+            jl = join_limits.get(tgt["alias"])
+            if jl and jl.get("max"):
+                roster = size_slayer_roster(needers, non, jl["max"], jl.get("min", 0))
+            else:
+                roster = needers + non   # unknown limits — send all, learn this run
+            mob = {"name": tgt["name"], "mob_id": tgt["mob_id"],
+                   "room_id": tgt["room"], "alias": tgt["alias"]}
             try:
                 won, dmg, note = await self._do_world_raid(roster, mob)
             except Exception as e:
                 won, dmg, note = False, 0, f"error: {e}"
+            # Refresh learned limits in case _do_world_raid just learned this god's.
+            if tgt["alias"] not in join_limits:
+                _fresh = db.get_join_limits().get(tgt["alias"])
+                if _fresh:
+                    join_limits[tgt["alias"]] = _fresh
             if won:
                 wins += 1
             results.append((tgt["alias"], won, len(needers), dmg, note))

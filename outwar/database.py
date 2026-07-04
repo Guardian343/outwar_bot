@@ -758,3 +758,24 @@ def get_teleporters() -> dict:
 
 def save_teleporters(mapping: dict):
     _write_dict("teleporters.json", mapping)
+
+
+# ---------------------------------------------------------------------------
+# Slayer god join limits (min/max accounts per raid) — learned live from the
+# god's form page, then reused. NOT prime-god raid caps (different mechanic).
+#   join_limits.json: { "<alias>": {"min": 20, "max": 60} }
+# ---------------------------------------------------------------------------
+
+def get_join_limits() -> dict:
+    return _read_dict("join_limits.json")
+
+
+def save_join_limits(mapping: dict):
+    _write_dict("join_limits.json", mapping)
+
+
+def set_join_limit(alias: str, min_join: int, max_join: int):
+    """Learn/update one god's join limits and persist."""
+    data = get_join_limits()
+    data[alias] = {"min": int(min_join), "max": int(max_join)}
+    save_join_limits(data)
