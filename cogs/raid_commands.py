@@ -1694,6 +1694,10 @@ class RaidCommands(commands.Cog):
             former_suid = None
             god_seen     = False   # god mob present in the room (even if capped)
             room_reached = False   # a scout actually reached the god's room
+            # Target god's mob id — form ONLY on this mob, not the first formable one.
+            # Shared rooms hold 2+ raidable gods; without this the bot forms on the
+            # wrong one and logs a false LOSE. Empty -> fall back to first-formable.
+            _target_mid = str(mob.get("mob_id") or "")
 
             async def _navigate(t, try_as_former=False):
                 nonlocal form_url, former, former_suid, god_seen, room_reached
@@ -1711,11 +1715,14 @@ class RaidCommands(commands.Cog):
                         if cur_room == room_id:
                             room_reached = True
                             for m in loc.get("roomDetailsNew", []):
-                                if m.get("type") == 1:   # god mob present (spawned)
-                                    god_seen = True
+                                if m.get("type") == 1 and (not _target_mid
+                                        or str(m.get("mobId")) == _target_mid):
+                                    god_seen = True   # OUR target god present (spawned)
                             if try_as_former and not form_url:
                                 for m in loc.get("roomDetailsNew", []):
-                                    if m.get("type") == 1 and m.get("canForm"):
+                                    if (m.get("type") == 1 and m.get("canForm")
+                                            and (not _target_mid
+                                                 or str(m.get("mobId")) == _target_mid)):
                                         mid = m.get("mobId")
                                         h   = m.get("h", "")
                                         if mid:
@@ -1742,11 +1749,14 @@ class RaidCommands(commands.Cog):
                         if last_data:
                             room_reached = True
                             for m in last_data.get("roomDetailsNew", []):
-                                if m.get("type") == 1:
+                                if m.get("type") == 1 and (not _target_mid
+                                        or str(m.get("mobId")) == _target_mid):
                                     god_seen = True
                         if last_data and try_as_former and not form_url:
                             for m in last_data.get("roomDetailsNew", []):
-                                if m.get("type") == 1 and m.get("canForm"):
+                                if (m.get("type") == 1 and m.get("canForm")
+                                        and (not _target_mid
+                                             or str(m.get("mobId")) == _target_mid)):
                                     mid = m.get("mobId")
                                     h   = m.get("h", "")
                                     if mid:
