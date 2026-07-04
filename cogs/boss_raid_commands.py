@@ -1665,10 +1665,15 @@ class BossRaidCommands(commands.Cog):
 
                     while consecutive_timeouts < MAX_TIMEOUTS:
                         try:
+                            _t0 = datetime.now().timestamp()
+                            _gap = (_t0 - launch_ts) if launch_ts else 0.0
+                            print(f"[TIMING] Loop B raid start — {_gap:.1f}s since last launch")
                             damage, under_minimum, secs_to_hour, new_record, launch_ts = await asyncio.wait_for(
                                 self._do_boss_raid(sorted_t, current_boss, launch_ts),
                                 timeout=180
                             )
+                            print(f"[TIMING] Loop B _do_boss_raid returned in "
+                                  f"{(datetime.now().timestamp() - _t0):.1f}s")
                             consecutive_timeouts = 0
                             break
                         except asyncio.TimeoutError:
@@ -1729,6 +1734,14 @@ class BossRaidCommands(commands.Cog):
                     # Log to health monitor
                     if hasattr(self.bot, 'health'):
                         self.bot.health.log_raid_success()
+                    if not first_raid_done:
+                        # Green flag — first confirmed raid of the run (Loop B path).
+                        _crew  = self._status.get("source", group_name or "Crew")
+                        _chars = self._status.get("last_raid_chars", len(sorted_t))
+                        await notify.send(
+                            f"🚩 **{_crew}** is up and raiding — first raid complete: "
+                            f"**{damage:,}** damage · {_chars}/{len(sorted_t)} accounts.")
+                        first_raid_done = True
                     if new_record and damage > 0:
                         await notify.send(
                             f"🏆 **New top raid damage against {current_boss}!**\n"
