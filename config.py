@@ -1,58 +1,94 @@
 import json
 import os
+from pathlib import Path
 
-# Load .env into the environment if python-dotenv is installed and a .env exists.
-# Optional import so the bot still runs if dotenv isn't installed (falls back to config.json).
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+from dotenv import load_dotenv
 
-# Config keys the bot uses -> their environment-variable names (.env).
-_ENV_MAP = {
-    "prefix":     "BOT_PREFIX",
-    "token":      "DISCORD_TOKEN",
-    "channel":    "CHANNEL_ID",
-    "logchannel": "LOG_CHANNEL_ID",
-    "godchannel": "GOD_CHANNEL_ID",
-    "username":   "OUTWAR_USERNAME",
-    "password":   "OUTWAR_PASSWORD",
-}
-_INT_KEYS = {"channel", "logchannel", "godchannel"}  # channel IDs are ints
+"""
+config.py
+
+This module combines two configuration sources:
+
+config.json
+-----------
+Contains non-sensitive application settings, such as:
+- Discord channel IDs
+- Command prefix
+- Timers
+- Feature flags
+
+.env
+----
+Contains sensitive credentials, such as:
+- Discord bot token
+- Outwar username
+- Outwar password
+
+The rest of the application only calls load_config() and doesn't need
+to know where individual settings come from.
+"""
+
+# ------------------------------------------------------------------
+# File locations
+# ------------------------------------------------------------------
+
+# Root directory of the project (where config.py is located)
+BASE_DIR = Path(__file__).resolve().parent
+
+# Non-sensitive configuration
+CONFIG_PATH = BASE_DIR / "config.json"
+
+# Sensitive credentials
+ENV_PATH = BASE_DIR / ".env"
 
 
-def load_config(path: str = None) -> dict:
-    """Load bot config. Prefers environment variables (from a git-ignored .env);
-    falls back to config.json for anything not set in the environment. This keeps
-    secrets in .env (the dev convention) while staying backward-compatible with an
-    existing config.json during/after the transition. Returns the same dict shape
-    the bot already expects, so nothing downstream changes."""
-    # 1) Start from config.json if present (fallback / backward compatible)
-    if path is None:
-        base = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.join(base, "config.json")
-    cfg = {}
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-        except Exception:
-            cfg = {}
+# ------------------------------------------------------------------
+# Load environment variables from the local .env file.
+#
+# override=True ensures that values from the local .env file take
+# precedence over any existing environment variables on the machine.
+# ------------------------------------------------------------------
 
-    # 2) Override with environment variables where set (.env wins over config.json)
-    for key, env_name in _ENV_MAP.items():
-        val = os.getenv(env_name)
-        if val not in (None, ""):
-            cfg[key] = val
+load_dotenv(dotenv_path=ENV_PATH, override=True)
 
-    # 3) Coerce channel IDs to int (env values arrive as strings)
-    for key in _INT_KEYS:
-        if cfg.get(key) is not None:
-            try:
-                cfg[key] = int(cfg[key])
-            except (ValueError, TypeError):
-                pass
 
-    cfg.setdefault("prefix", "?")
-    return cfg
+# ------------------------------------------------------------------
+# Helper function
+#
+# Reads a required environment variable.
+# If the variable is missing, the application stops immediately with
+# a clear error message instead of failing later with obscure errors.
+# ------------------------------------------------------------------
+
+def require_env(name: str) -> str:
+    value = os.getenv(name)
+
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+
+    return value
+
+
+# ------------------------------------------------------------------
+# Load the complete application configuration.
+#
+# Steps:
+#
+# 1. Read all non-sensitive settings from config.json.
+# 2. Inject sensitive credentials from .env.
+#
+# This keeps secrets out of the repository while allowing the rest
+# of the application to continue using a single configuration object.
+# ------------------------------------------------------------------
+
+def load_config(path: str | None = None) -> dict:
+    config_path = Path(path) if path else CONFIG_PATH
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    config["token"] = require_env("DISCORD_BOT_TOKEN")
+    config["username"] = require_env("OUTWAR_USERNAME")
+    config["password"] = require_env("OUTWAR_PASSWORD")
+
+    return config

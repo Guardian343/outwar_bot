@@ -91,7 +91,7 @@ async def main():
         if channel:
             await channel.send("DeathBot is online")
         else:
-            print(f"Warning: could not find channel ID {config['channel']} — check your config.json")
+            print(f"Warning: could not find channel ID {config['channel']} — check your config.json channel IDs")
 
     @bot.event
     async def on_command_error(ctx, error):
@@ -147,7 +147,7 @@ async def main():
             cmd      = ctx.command.name if ctx.command else "unknown"
             err_str  = str(error)
             print(f"Command error in {cmd}: {err_str}")
-            await ctx.send(f"An error occurred: {error}")
+            await ctx.send("An error occurred while running that command. Check the log channel.")
             # Log to health monitor
             if hasattr(bot, 'health'):
                 bot.health.log_error(cmd, err_str)
