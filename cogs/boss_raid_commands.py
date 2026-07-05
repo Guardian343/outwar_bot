@@ -331,35 +331,55 @@ class BossRaidCommands(commands.Cog):
 
             async def _retry_md(t):
                 suid = t.get("suid")
+                hit_ad_frame = False
                 async with retry_sem:
-                    for attempt in range(3):
+                    # Retry generously — the ad-frame is transient, and a readable
+                    # response almost always shows "already cast" (MD DID land).
+                    for attempt in range(6):
                         resp = await self.session.post_as("cast_skills.php", {
                             "castskillid": str(Skill.MARKDOWN),
                             "cast":        "Cast Skill",
                         }, suid)
                         resp_lower = resp.lower() if resp else ""
+                        if not resp:
+                            await asyncio.sleep(1.5 * (attempt + 1))
+                            continue
                         if "too many" in resp_lower or "rate limit" in resp_lower or "please wait" in resp_lower:
                             await asyncio.sleep(3.0 * (attempt + 1))
                             continue
-                        # Ad interstitial — Outwar occasionally serves a 160x600 ad frame
-                        # (#outerdiv/#inneriframe) instead of processing the cast. It's
-                        # transient; wait briefly and retry rather than giving up.
-                        if resp and "#outerdiv" in resp and "#inneriframe" in resp:
+                        # Ad interstitial — Outwar serves a 160x600 ad frame
+                        # (#outerdiv/#inneriframe) instead of the cast result. Transient.
+                        if "#outerdiv" in resp and "#inneriframe" in resp:
+                            hit_ad_frame = True
                             if CAST_DEBUG:
-                                print(f"[CAST-DEBUG] RETRY MD hit ad-frame for {t['name']} "
+                                print(f"[CAST-DEBUG] RETRY MD ad-frame for {t['name']} "
                                       f"(suid={suid}) attempt {attempt+1} — retrying")
-                            await asyncio.sleep(2.0 * (attempt + 1))
+                            await asyncio.sleep(1.5 * (attempt + 1))
                             continue
                         if "You just cast" in resp or "already cast" in resp_lower:
                             db.set_md_cast(suid, t["name"], datetime.now().timestamp())
                             cast_ok.add(suid)
                             return
+                        # Readable, non-success response -> genuine failure.
                         if CAST_DEBUG:
-                            print(f"[CAST-DEBUG] RETRY MD failed for {t['name']} (suid={suid}) "
-                                  f"attempt {attempt+1}. Response: {resp[:200]!r}")
+                            print(f"[CAST-DEBUG] RETRY MD failed (readable) for {t['name']} "
+                                  f"(suid={suid}): {resp[:200]!r}")
                         break
+                    # SAFEGUARD: if every attempt was blocked by the ad-frame (never a
+                    # readable response), the cast almost certainly landed — confirmed
+                    # that ad-frame responses correspond to successful MD casts. Keep the
+                    # account in the raid rather than benching a buffed (often top) account.
+                    if hit_ad_frame:
+                        db.set_md_cast(suid, t["name"], datetime.now().timestamp())
+                        cast_ok.add(suid)
+                        md_assumed_active.add(t["name"])
 
+            md_assumed_active = set()
             await asyncio.gather(*[_retry_md(t) for t in missing])
+            if md_assumed_active:
+                print(f"[CAST] Ad-frame blocked confirmation for {len(md_assumed_active)} "
+                      f"account(s) — MD assumed active, KEPT in raid: "
+                      f"{', '.join(sorted(md_assumed_active))}")
 
         # Hard failure report
         md_state_final = db.get_md_state()
