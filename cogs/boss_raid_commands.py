@@ -918,20 +918,32 @@ class BossRaidCommands(commands.Cog):
                 _join_conc = 10
             join_sem = asyncio.Semaphore(max(1, _join_conc))
 
+            _join_ratelimited = 0   # count joins whose response still showed a rate-limit
+
             async def _join_one(t):
+                nonlocal _join_ratelimited
                 suid = t.get("suid")
                 if not suid:
                     return
                 async with join_sem:
                     try:
-                        await session.post_as(raid_url, {
+                        resp = await session.post_as(raid_url, {
                             "submit":   "Join this Raid!",
                             "raidjoin": "1",
                         }, suid)
+                        rl = (resp or "").lower()
+                        if "too many" in rl or "rate limit" in rl or "please wait" in rl:
+                            _join_ratelimited += 1
                     except Exception:
                         pass
 
+            _join_t0 = datetime.now().timestamp()
             await asyncio.gather(*[_join_one(t) for t in joiners])
+            _join_secs = datetime.now().timestamp() - _join_t0
+            print(f"[TIMING] join took {_join_secs:.1f}s "
+                  f"({len(joiners)} accounts, concurrency={_join_conc}, "
+                  f"host_limit={db.get_settings().get('host_connection_limit', 10)}, "
+                  f"rate-limited={_join_ratelimited})")
 
             # Measure join cost (only if not already known)
             if measure_join_suid and join_rage_before > 0 and not known_costs.get("md_join"):
@@ -944,7 +956,7 @@ class BossRaidCommands(commands.Cog):
                     db.save_settings(settings)
                     print(f"Discovered md_join for {boss_key}: {discovered_join}")
 
-            await asyncio.sleep(3)  # Allow all join requests to settle
+            await asyncio.sleep(1)  # Brief settle for join requests (was 3s)
 
             # Enforce 60s game limit — wait only the remainder since last launch
             if last_launch_ts > 0:
