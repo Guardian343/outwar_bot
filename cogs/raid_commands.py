@@ -1320,7 +1320,7 @@ class RaidCommands(commands.Cog):
             form_url = None
             former = None
             former_suid = None
-            _target_mob_id = mob.get("mob_id")   # stable god id for presence check
+            _target_mob_id = god.get("mob_id") or god.get("god_id")   # stable god id for presence check
             god_seen = False                      # god mob present in room (even if capped)
             room_reached = False                  # some scout actually reached the god's room
 
