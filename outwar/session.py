@@ -94,7 +94,7 @@ class OutwarSession:
             self.user_id = 0
 
         print(f"Got user_id from redirect: {self.user_id}")
-        print(f"Got session ID from cookie: {self.session_id[:8]}...")
+        print(f"Got session ID from cookie.")
         from datetime import datetime, timezone
         self._last_login = datetime.now(timezone.utc)
 
@@ -124,7 +124,7 @@ class OutwarSession:
                     await self.on_relogin(success=False, error=str(e))
                 return False
 
-    # ── Internal retry helper ────────────────────────────────────────────────
+        # ── Internal retry helper ────────────────────────────────────────────────
     async def _request_with_retry(
         self,
         method: str,
@@ -132,22 +132,38 @@ class OutwarSession:
         *,
         data: dict = None,
         cookies: dict = None,
-        max_attempts: int = 25,
+        max_attempts: int = None,
         timeout_secs: float = 60.0,
+        is_action: bool = False,
     ) -> str:
         """
-        Fire a GET or POST with up to max_attempts retries.
-        Backs off on errors: 1s, 2s, 4s, 8s… capped at 30s.
-        Detects rate limits and session expiry and handles both.
+        Fire a GET or POST request to Outwar.
+
+        Read-only requests may be retried because they only fetch data.
+
+        Action requests should NOT be blindly retried. A timeout or connection
+        error does not always mean the action failed server-side. Retrying could
+        accidentally execute the same action more than once.
+
+        Default retry policy:
+        - Read-only requests: 5 attempts
+        - Action requests: 1 attempt
         """
+        method = method.upper()
+
+        if max_attempts is None:
+            max_attempts = 1 if is_action else 5
+
         timeout = aiohttp.ClientTimeout(total=timeout_secs)
         last_error = None
 
         for attempt in range(max_attempts):
             try:
                 kwargs = {"timeout": timeout}
+
                 if cookies:
                     kwargs["cookies"] = cookies
+
                 if method == "POST":
                     kwargs["data"] = data or {}
                     cm = self._session.post(url, **kwargs)
@@ -157,52 +173,119 @@ class OutwarSession:
                 async with cm as resp:
                     html = await resp.text()
 
-                # Rate limit — back off and retry
                 html_lower = html.lower()
+
+                # Rate limit — retry read-only requests, but do not keep
+                # retrying action requests aggressively.
                 if any(p in html_lower for p in ("too many requests", "rate limit", "slow down")):
                     wait = min(30.0, 2.0 ** attempt)
-                    print(f"[SESSION] Rate limit on {url} attempt {attempt+1} — waiting {wait:.0f}s")
+
+                    print(
+                        f"[SESSION] Rate limit on {method} {url} "
+                        f"attempt {attempt + 1}/{max_attempts} — waiting {wait:.0f}s"
+                    )
+
+                    if is_action:
+                        return ""
+
                     await asyncio.sleep(wait)
                     continue
 
-                # Session expired — re-login then retry
+                # Session expired.
                 if self._is_logged_out(html):
-                    await self._relogin_if_needed(html)
-                    continue
+                    relogged = await self._relogin_if_needed(html)
+
+                    if not relogged:
+                        return ""
+
+                    # Safe to retry read-only requests after re-login.
+                    if not is_action:
+                        continue
+
+                    # Do not automatically repeat actions after re-login.
+                    print(
+                        f"[SESSION] Session expired during action request: {method} {url}. "
+                        "Re-login was attempted, but the action was not retried automatically."
+                    )
+                    return ""
 
                 return html
 
             except asyncio.TimeoutError:
                 last_error = "timeout"
+
             except aiohttp.ClientError as e:
                 last_error = str(e)
+
             except Exception as e:
                 last_error = str(e)
 
+            # Do not retry action requests after timeout/network errors.
+            if is_action:
+                print(
+                    f"[SESSION] Action request failed and was not retried: "
+                    f"{method} {url}: {last_error}"
+                )
+                return ""
+
             wait = min(30.0, 2.0 ** attempt)
+
             if attempt < max_attempts - 1:
+                print(
+                    f"[SESSION] Request failed: {method} {url} "
+                    f"attempt {attempt + 1}/{max_attempts}: {last_error}. "
+                    f"Retrying in {wait:.0f}s..."
+                )
                 await asyncio.sleep(wait)
 
-        print(f"[SESSION] All {max_attempts} attempts failed for {url}: {last_error}")
+        print(f"[SESSION] All {max_attempts} attempts failed for {method} {url}: {last_error}")
         return ""
 
     async def get(self, path: str) -> str:
+        """Read-only GET request. Safe to retry."""
         url = f"{BASE_URL}/{path.lstrip('/')}"
-        return await self._request_with_retry("GET", url)
+        return await self._request_with_retry("GET", url, is_action=False)
 
     async def get_as(self, path: str, suid: int) -> str:
-        """GET as a specific trustee without mutating the shared cookie jar."""
+        """Read-only GET as a specific trustee. Safe to retry."""
         url = f"{BASE_URL}/{path.lstrip('/')}"
-        return await self._request_with_retry("GET", url, cookies={"ow_userid": str(suid)})
+        return await self._request_with_retry(
+            "GET",
+            url,
+            cookies={"ow_userid": str(suid)},
+            is_action=False,
+        )
 
-    async def post_as(self, path: str, data: dict, suid: int) -> str:
-        """POST as a specific trustee without mutating the shared cookie jar."""
-        url = f"{BASE_URL}/{path.lstrip('/')}"
-        return await self._request_with_retry("POST", url, data=data, cookies={"ow_userid": str(suid)})
+    async def post_as(self, path: str, data: dict, suid: int, *, is_action: bool = True) -> str:
+        """
+        POST as a specific trustee.
 
-    async def post(self, path: str, data: dict) -> str:
+        Defaults to is_action=True because most Outwar POST endpoints mutate
+        game state: casting, potions, joining raids, attacking, etc.
+        """
         url = f"{BASE_URL}/{path.lstrip('/')}"
-        return await self._request_with_retry("POST", url, data=data)
+        return await self._request_with_retry(
+            "POST",
+            url,
+            data=data,
+            cookies={"ow_userid": str(suid)},
+            is_action=is_action,
+        )
+
+    async def post(self, path: str, data: dict, *, is_action: bool = True) -> str:
+        """
+        POST request.
+
+        Defaults to is_action=True. If a POST endpoint is truly read-only,
+        call it with is_action=False explicitly.
+        """
+        url = f"{BASE_URL}/{path.lstrip('/')}"
+        return await self._request_with_retry(
+            "POST",
+            url,
+            data=data,
+            is_action=is_action,
+        )
 
     async def get_sse(self, path: str, timeout_secs: int = 3600) -> str:
         """
