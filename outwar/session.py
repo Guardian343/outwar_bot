@@ -263,6 +263,11 @@ class OutwarSession:
                         f"attempt {attempt + 1}/{max_attempts}"
                     )
 
+                    if not is_action and attempt < max_attempts - 1:
+                        wait = min(10.0, 2.0 ** attempt)
+                        await asyncio.sleep(wait)
+                        continue
+
                     return RequestResult(
                         status=RequestStatus.AD_FRAME,
                         html=html,
