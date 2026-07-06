@@ -153,22 +153,28 @@ class OutwarSession:
         )
 
     def _is_ad_frame(self, html: str) -> bool:
-        """
-        Detect Outwar ad-frame responses.
-
-        These are not normal success pages, but they also don't always mean the
-        underlying action failed. Callers should verify game state instead of
-        blindly retrying the action.
-        """
         if not html:
             return False
 
         lower = html.lower()
 
-        return (
-            ("outerdiv" in lower and "inneriframe" in lower)
-            or "160x600" in lower
+        has_ad_markers = "outerdiv" in lower and "inneriframe" in lower
+
+        has_real_game_page = any(
+            marker in lower
+            for marker in (
+                "toolbar_rage",
+                "charselectdropdown",
+                "main content starts here",
+                "sidebar-wrapper",
+                "god cap:",
+                "join this raid",
+                "crew_bossspawns",
+                "primegods",
+            )
         )
+
+        return has_ad_markers and not has_real_game_page
 
     async def _relogin_if_needed(self, html: str) -> bool:
         """Re-login if session has expired. Returns True if re-login happened."""
