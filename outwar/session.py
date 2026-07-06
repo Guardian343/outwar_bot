@@ -143,32 +143,66 @@ class OutwarSession:
 
     def _is_logged_out(self, html: str) -> bool:
         """Detect if the response is a login redirect / session expired."""
-        if not html:
-            return False
+        return self._is_logged_out_page(html)
 
-        return (
-            "login_username" in html
-            or "login_password" in html
-            or ("Please login" in html and "rg_sess_id" not in html)
-        )
-
-    def _is_ad_frame(self, html: str) -> bool:
+    def _is_logged_in_page(self, html: str) -> bool:
         """
-        Detect Outwar ad-frame responses.
+        Detect a valid logged-in Outwar page.
 
-        These are not normal success pages, but they also don't always mean the
-        underlying action failed. Callers should verify game state instead of
-        blindly retrying the action.
+        Normal logged-in Outwar pages also contain public marketing meta tags
+        and layout/ad-related CSS such as #outerdiv and #inneriframe. Those are
+        NOT reliable signals for logout or ad-frame detection.
+
+        This detector uses positive authenticated-page markers instead.
         """
         if not html:
             return False
 
         lower = html.lower()
 
-        return (
-            ("outerdiv" in lower and "inneriframe" in lower)
-            or "160x600" in lower
+        logged_in_markers = (
+            "toolbar_rage",
+            "charselectdropdown",
+            "god cap",
+            "sidebar-wrapper",
+            "main content starts here",
+            "crew_home",
+            "crew_bossspawns",
+            "primegods",
+            "logout",
         )
+
+        # Require more than one marker so one random string does not classify
+        # a page as authenticated by accident.
+        score = sum(marker in lower for marker in logged_in_markers)
+        return score >= 2
+
+    def _is_logged_out_page(self, html: str) -> bool:
+        """
+        Detect the public/login/unauthenticated Outwar page.
+
+        This should only return True when the page looks unauthenticated AND
+        does not contain normal logged-in game markers.
+        """
+        if not html:
+            return False
+
+        lower = html.lower()
+
+        if self._is_logged_in_page(html):
+            return False
+
+        logged_out_markers = (
+            "login_username",
+            "login_password",
+            "please login",
+            "browser based mmorpg",
+            "free online mmorpg",
+            "no download required",
+            "outwar is a free online",
+        )
+
+        return any(marker in lower for marker in logged_out_markers)
 
     async def _relogin_if_needed(self, html: str) -> bool:
         """Re-login if session has expired. Returns True if re-login happened."""
@@ -257,19 +291,25 @@ class OutwarSession:
                         attempts=attempt + 1,
                     )
 
-                if self._is_ad_frame(html):
-                    print(
-                        f"[SESSION] Ad-frame response: {method} {url} "
-                        f"attempt {attempt + 1}/{max_attempts}"
-                    )
-
+                # Classify authenticated game pages first. This avoids false
+                # positives from normal Outwar pages that contain marketing
+                # meta tags or layout/ad CSS in the header.
+                if self._is_logged_in_page(html):
                     return RequestResult(
-                        status=RequestStatus.AD_FRAME,
+                        status=RequestStatus.SUCCESS,
                         html=html,
                         attempts=attempt + 1,
                     )
 
+                # If the response looks unauthenticated, re-login for read-only
+                # requests and retry. For action requests, do not automatically
+                # repeat the action after re-login because it may have landed.
                 if self._is_logged_out(html):
+                    print(
+                        f"[SESSION] Logged-out response: {method} {url} "
+                        f"attempt {attempt + 1}/{max_attempts}"
+                    )
+
                     relogged = await self._relogin_if_needed(html)
 
                     if relogged and not is_action:
@@ -281,9 +321,17 @@ class OutwarSession:
                         attempts=attempt + 1,
                     )
 
+                # Unknown page shape. Keep the HTML for legacy callers and
+                # debugging, but classify it separately from logged-out.
+                print(
+                    f"[SESSION] Unknown response shape: {method} {url} "
+                    f"attempt {attempt + 1}/{max_attempts}"
+                )
+
                 return RequestResult(
-                    status=RequestStatus.SUCCESS,
+                    status=RequestStatus.ERROR,
                     html=html,
+                    error="unknown_response_shape",
                     attempts=attempt + 1,
                 )
 
