@@ -353,7 +353,7 @@ class OutwarSession:
             is_action=False,
         )
 
-        return result.html if result.ok else ""
+        return result.html
 
     async def get_as(self, path: str, suid: int) -> str:
         """Read-only GET as a specific trustee. Safe to retry."""
@@ -364,7 +364,7 @@ class OutwarSession:
             is_action=False,
         )
 
-        return result.html if result.ok else ""
+        return result.html
 
     async def post(self, path: str, data: dict, *, is_action: bool = True) -> str:
         """
@@ -380,7 +380,7 @@ class OutwarSession:
             is_action=is_action,
         )
 
-        return result.html if result.ok else ""
+        return result.html
 
     async def post_as(
         self,
@@ -404,7 +404,7 @@ class OutwarSession:
             is_action=is_action,
         )
 
-        return result.html if result.ok else ""
+        return result.html
 
     async def get_sse(self, path: str, timeout_secs: int = 3600) -> str:
         """
