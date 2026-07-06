@@ -271,6 +271,7 @@ class OutwarSession:
 
                     if not is_action and attempt < max_attempts - 1:
                         wait = min(10.0, 2.0 ** attempt)
+                        print(f"[SESSION] Retrying read-only ad-frame in {wait:.0f}s...")
                         await asyncio.sleep(wait)
                         continue
 
