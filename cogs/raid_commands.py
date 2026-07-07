@@ -1459,31 +1459,87 @@ class RaidCommands(commands.Cog):
                     continue
                 joiners.append(t)
 
-            # Join concurrently
-            join_semaphore = asyncio.Semaphore(10)
+            # Join concurrently, then VERIFY who actually made it in before launching.
+            # Prime raids have a hard minimum-to-launch and zero roster margin, so a
+            # single rate-limited join (which does NOT auto-retry) would otherwise drop
+            # the raid below minimum and launch it empty (damage=0). We therefore:
+            #   1) fire all joins, classifying each result (SUCCESS vs RATE_LIMITED/etc)
+            #   2) re-join ONLY the accounts we've confirmed did NOT join (safe — no
+            #      double-join risk, because a confirmed-failed join never landed)
+            #   3) launch only once the confirmed count meets the minimum
+            # Concurrency is tunable via settings 'prime_join_concurrency' (default 8),
+            # matching the boss-join throttle so primes don't blow past it at a hardcoded
+            # value. Effective concurrency is still min(this, host_connection_limit).
+            from outwar.session import RequestStatus
+            try:
+                _prime_conc = int(db.get_settings().get("prime_join_concurrency", 8))
+            except Exception:
+                _prime_conc = 8
+            join_semaphore = asyncio.Semaphore(max(1, _prime_conc))
 
-            async def _join(t):
+            # Minimum accounts needed in the raid to launch (the joiners we intended).
+            _min_to_launch = len(joiners)
+
+            async def _join_one(t):
+                """Attempt one join. Returns (joined_ok, capped) based on real status."""
                 nonlocal capped_count
                 suid = t.get("suid")
+                if not suid:
+                    return (False, False)
                 try:
                     async with join_semaphore:
-                        join_resp = await session.post_as(raid_url, {
-                            "submit": "Join this Raid!",
-                            "raidjoin": "1"
-                        }, suid)
-                    if join_resp:
-                        content_start = join_resp.find('<div id="content"')
-                        content_area = join_resp[content_start:content_start+3000] if content_start > 0 else join_resp[5000:10000]
-                        if any(x in content_area.lower() for x in (
-                            "capped", "cap limit", "already reached your", "you have reached your", "reached the maximum"
-                        )):
-                            capped_count += 1
+                        result = await session.request_result(
+                            "POST", raid_url,
+                            data={"submit": "Join this Raid!", "raidjoin": "1"},
+                            cookies={"ow_userid": str(suid)}, is_action=True,
+                        )
+                    # A rate-limited / non-success action did NOT land — report not-joined.
+                    if result.status != RequestStatus.SUCCESS:
+                        return (False, False)
+                    html = result.html or ""
+                    content_start = html.find('<div id="content"')
+                    content_area = html[content_start:content_start+3000] if content_start > 0 else html[5000:10000]
+                    if any(x in content_area.lower() for x in (
+                        "capped", "cap limit", "already reached your",
+                        "you have reached your", "reached the maximum"
+                    )):
+                        capped_count += 1
+                        return (False, True)   # capped: don't retry, won't help
+                    return (True, False)
                 except Exception as e:
-                    print(f"Join error for {t['name']}: {e}")
+                    print(f"Join error for {t.get('name')}: {e}")
+                    return (False, False)
 
-            await asyncio.gather(*[_join(t) for t in joiners])
+            # Round 1: everyone joins.
+            results = await asyncio.gather(*[_join_one(t) for t in joiners])
+            joined = {t["suid"] for t, (ok, _cap) in zip(joiners, results) if ok}
+            missing = [t for t, (ok, cap) in zip(joiners, results) if not ok and not cap]
+
+            # Rounds 2-3: re-join ONLY the confirmed-missing (rate-limited) accounts,
+            # with a short settle between rounds so the rate-limit window clears.
+            _rejoin_rounds = 0
+            while missing and _rejoin_rounds < 2:
+                _rejoin_rounds += 1
+                await asyncio.sleep(2)   # let the rate-limit window clear before retrying
+                dbg(f"re-joining {len(missing)} missing account(s), round {_rejoin_rounds}")
+                retry_results = await asyncio.gather(*[_join_one(t) for t in missing])
+                for t, (ok, _cap) in zip(list(missing), retry_results):
+                    if ok:
+                        joined.add(t["suid"])
+                missing = [t for t, (ok, cap) in zip(missing, retry_results) if not ok and not cap]
+
             await asyncio.sleep(0.5)
-            dbg(f"joiners attempted: {len(joiners)} (low-rage skipped: {low_rage_count}); join-capped: {capped_count}")
+            _confirmed = len(joined)
+            dbg(f"joiners attempted: {len(joiners)} · confirmed in: {_confirmed} · "
+                f"still missing: {len(missing)} · join-capped: {capped_count} "
+                f"(low-rage skipped: {low_rage_count})")
+
+            # Verify-before-launch: if we couldn't get enough accounts in, DON'T launch
+            # an under-strength raid (it would just read damage=0 and waste the attempt).
+            if _confirmed < _min_to_launch:
+                dbg(f"NOT launching — only {_confirmed}/{_min_to_launch} confirmed in raid")
+                return False, 0, (f"Under-strength: {_confirmed}/{_min_to_launch} joined "
+                                  f"(rate-limited joins dropped)")
 
             # Extract raidid from raid_url
             import re as _re

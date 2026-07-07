@@ -654,7 +654,18 @@ class PrimeWatcher(commands.Cog):
                     st["attempts"] = attempts
                     st["groups"] = list(groups_used)
                     await _live_edit()   # throttled live tick (attempts + best HP)
+                    # Pace attempts: firing prime raids back-to-back with no gap
+                    # saturates the shared connection budget and rate-limits the
+                    # joins (which then drop, since actions don't auto-retry). A
+                    # short settle between attempts lets the budget clear. Only
+                    # pause if we're going to loop again.
+                    if got < target and attempts < 10:
+                        await asyncio.sleep(3)
                 gi += 1
+                # Settle between groups too, so the next group's join burst doesn't
+                # start while the previous one's connections are still draining.
+                if got < target and gi < len(order):
+                    await asyncio.sleep(3)
 
             # finalise this prime's state
             st["got"] = got
