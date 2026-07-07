@@ -122,8 +122,9 @@ class PrimeWatcher(commands.Cog):
         lines = []
         for w in data.values():
             state = "🟢 ON" if w.get("enabled") else "⚪ off"
+            mode = "🔓 open" if w.get("mode", "closed") == "open" else "🔒 closed"
             lines.append(
-                f"**{w['name']}** — {state} · "
+                f"**{w['name']}** — {state} · {mode} · "
                 f"{len(w.get('groups', []))} group(s) · {len(w.get('primes', {}))} prime(s)"
             )
         await ctx.send(embed=es.info_embed(
@@ -421,10 +422,15 @@ class PrimeWatcher(commands.Cog):
         except Exception:
             pass
 
+        _mode = w.get("mode", "closed")
+        _mode_lbl = "🔓 open (accounts pooled across groups)" if _mode == "open" \
+            else "🔒 closed (groups kept intact)"
+        _groups_hdr = "**Groups** (pooled — open mode)" if _mode == "open" \
+            else "**Groups** (kept intact)"
         await ctx.send(embed=es.info_embed(
             f"🛰️ {w['name']}",
-            f"Status: {state}\nCrew: **{crew}**\n\n"
-            f"**Groups** (kept intact)\n{glines}\n\n"
+            f"Status: {state}\nMode: {_mode_lbl}\nCrew: **{crew}**\n\n"
+            f"{_groups_hdr}\n{glines}\n\n"
             f"**Primes** (caps are per prime)\n{plines}",
         ))
 
