@@ -25,6 +25,7 @@ class RequestStatus(str, Enum):
     TIMEOUT = "timeout"
     CLIENT_ERROR = "client_error"
     ERROR = "error"
+    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -144,6 +145,46 @@ class OutwarSession:
     def _is_logged_out(self, html: str) -> bool:
         """Detect if the response is a login redirect / session expired."""
         return self._is_logged_out_page(html)
+    
+    def _is_ajax_or_partial_success(self, html: str, path: str = "") -> bool:
+        """
+        Detect valid AJAX / partial responses.
+
+        These responses often do not contain full page markers like toolbar_rage
+        or charselectdropdown, but they can still be valid successful responses.
+        """
+        if not html:
+            return False
+
+        lower = html.lower()
+        path_lower = path.lower()
+
+        # Most AJAX endpoints are valid partial responses and should not require
+        # full logged-in page markers.
+        if "ajax" in path_lower:
+            return True
+
+        # JSON response.
+        stripped = html.strip()
+        if (
+            (stripped.startswith("{") and stripped.endswith("}"))
+            or (stripped.startswith("[") and stripped.endswith("]"))
+        ):
+            return True
+
+        # Common partial response markers used by Outwar endpoints.
+        partial_markers = (
+            "item_id",
+            "item_name",
+            "backpack",
+            "potion",
+            "success",
+            "already drank",
+            "already consumed",
+            "invalid item",
+        )
+
+        return any(marker in lower for marker in partial_markers)
 
     def _is_logged_in_page(self, html: str) -> bool:
         """
@@ -290,17 +331,7 @@ class OutwarSession:
                         html=html,
                         attempts=attempt + 1,
                     )
-
-                # Classify authenticated game pages first. This avoids false
-                # positives from normal Outwar pages that contain marketing
-                # meta tags or layout/ad CSS in the header.
-                if self._is_logged_in_page(html):
-                    return RequestResult(
-                        status=RequestStatus.SUCCESS,
-                        html=html,
-                        attempts=attempt + 1,
-                    )
-
+                
                 # If the response looks unauthenticated, re-login for read-only
                 # requests and retry. For action requests, do not automatically
                 # repeat the action after re-login because it may have landed.
@@ -321,6 +352,23 @@ class OutwarSession:
                         attempts=attempt + 1,
                     )
 
+                if self._is_ajax_or_partial_success(html, path):
+                    return RequestResult(
+                        status=RequestStatus.SUCCESS,
+                        html=html,
+                        attempts=attempt + 1,
+                    )
+                
+                # Classify authenticated game pages first. This avoids false
+                # positives from normal Outwar pages that contain marketing
+                # meta tags or layout/ad CSS in the header.
+                if self._is_logged_in_page(html):
+                    return RequestResult(
+                        status=RequestStatus.SUCCESS,
+                        html=html,
+                        attempts=attempt + 1,
+                    )
+
                 # Unknown page shape. Keep the HTML for legacy callers and
                 # debugging, but classify it separately from logged-out.
                 print(
@@ -329,7 +377,7 @@ class OutwarSession:
                 )
 
                 return RequestResult(
-                    status=RequestStatus.ERROR,
+                    status=RequestStatus.UNKNOWN,
                     html=html,
                     error="unknown_response_shape",
                     attempts=attempt + 1,
