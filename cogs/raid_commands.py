@@ -1374,7 +1374,7 @@ class RaidCommands(commands.Cog):
 
                             if last_data:
                                 room_reached = True
-                                for mob in loc.get("roomDetailsNew", []):
+                                for mob in last_data.get("roomDetailsNew", []):
                                     if mob.get("type") == 1:   # god mob present in room
                                         god_seen = True
                             if last_data and try_as_former and not form_url:

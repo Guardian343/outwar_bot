@@ -163,6 +163,7 @@ class PrimeWatcher(commands.Cog):
             "crew": "Legion of Death",
             "groups": [],
             "primes": {},
+            "mode": "closed",   # default: groups stay intact. !pw open <name> to pool.
         })
         await ctx.send(
             f"✅ Created watcher **{name.strip()}**.\n"
@@ -343,6 +344,37 @@ class PrimeWatcher(commands.Cog):
         w["enabled"] = False
         self._save(name, w)
         await ctx.send(f"⚪ **{w['name']}** is OFF.")
+
+    @primewatcher.command(name="open")
+    async def pw_open(self, ctx, *, name: str):
+        """Pool ALL this watcher's accounts across its groups. For each prime, the
+        bot picks the required number of members (max_members) by most caps
+        available — so bigger primes (20/30-man) can be filled from several
+        groups. Use `!pw closed <name>` to revert to intact groups."""
+        w = self._get(name)
+        if not w:
+            await ctx.send(f"No watcher named **{name}**.")
+            return
+        w["mode"] = "open"
+        self._save(name, w)
+        await ctx.send(
+            f"🔓 **{w['name']}** is now **OPEN** — accounts are pooled across all its "
+            f"groups and picked by most caps available to fill each prime's required size."
+        )
+
+    @primewatcher.command(name="closed")
+    async def pw_closed(self, ctx, *, name: str):
+        """Revert to the default: each group stays intact, accounts never mixed."""
+        w = self._get(name)
+        if not w:
+            await ctx.send(f"No watcher named **{name}**.")
+            return
+        w["mode"] = "closed"
+        self._save(name, w)
+        await ctx.send(
+            f"🔒 **{w['name']}** is now **CLOSED** — each group stays in its own lane "
+            f"(accounts never mixed across groups)."
+        )
 
     # ----- show ------------------------------------------------------------
     @primewatcher.command(name="show")
@@ -602,6 +634,44 @@ class PrimeWatcher(commands.Cog):
                 self._last_edit = now
                 await self._edit_cycle_report(report, w, dry_run, status)
 
+        # Watcher mode: "closed" (default) keeps each group intact — accounts never
+        # mixed. "open" pools ALL the watcher's accounts and picks the required number
+        # (max_members) by MOST CAPS AVAILABLE, so bigger primes (20/30-man) can be
+        # filled from several groups and cap usage stays even across the pool.
+        watcher_mode = w.get("mode", "closed")
+
+        async def _open_pool_for(god) -> list:
+            """Pool every account across the watcher's groups, drop capped, and
+            return them sorted by most caps available (desc). Sized by the caller."""
+            seen, pool = set(), []
+            for g in groups:
+                for t in (raid_cog._resolve_group(g["group"]) or []):
+                    suid = t.get("suid")
+                    if suid and suid not in seen:
+                        seen.add(suid)
+                        pool.append(t)
+            if not pool:
+                return []
+            # Read caps for the whole pool once, then rank by availability.
+            from outwar.scraper import parse_god_cap
+            sem = asyncio.Semaphore(8)
+            async def _caps(t):
+                suid = t.get("suid")
+                if not suid:
+                    return (t, 0, 0)
+                try:
+                    async with sem:
+                        html = await raid_cog.session.get_as("home", suid)
+                    used, mx = parse_god_cap(html)
+                    return (t, (mx - used) if mx else 999, mx)
+                except Exception:
+                    return (t, 0, 0)
+            capped_info = await asyncio.gather(*[_caps(t) for t in pool])
+            # Available = unknown max (0 -> treat as open) or caps remaining > 0.
+            avail = [(t, a) for (t, a, mx) in capped_info if mx == 0 or a > 0]
+            avail.sort(key=lambda x: x[1], reverse=True)   # most caps first
+            return [t for (t, _a) in avail]
+
         for idx, god, current, target, page in spawned:
             st = status[idx]
             god_name = god["name"]
@@ -614,6 +684,46 @@ class PrimeWatcher(commands.Cog):
 
             st["state"] = "raiding"
             await _live_edit(force=True)
+
+            # ---- OPEN MODE: pool accounts across groups, pick by most-caps ----
+            if watcher_mode == "open":
+                # How many accounts this prime needs (scraped max_members), default 10.
+                _god_db = db.get_prime_god(god_name) or {}
+                need = _god_db.get("max_members") or god.get("max_members") or 10
+                while got < target and attempts < 10:
+                    pool = await _open_pool_for(god)
+                    if len(pool) < need:
+                        st["note"] = f"pool short: {len(pool)}/{need} available (caps)"
+                        break
+                    squad = pool[:need]           # top `need` by caps available
+                    groups_used = ["(open pool)"]
+                    # Cast skills for each source group represented (skills per group).
+                    for g in groups:
+                        await self._cast_for_group(g["group"], g.get("skills", g.get("pots", "none")), channel)
+                    won, dmg, rnote = await raid_cog._do_god_raid(None, god, squad)
+                    attempts += 1
+                    if won:
+                        got += 1
+                    else:
+                        hp = self._hp_from_note(rnote)
+                        if hp is not None and (st["best_hp"] is None or hp < st["best_hp"]):
+                            st["best_hp"] = hp
+                    st["got"] = got; st["attempts"] = attempts; st["groups"] = list(groups_used)
+                    await _live_edit()
+                    if got < target and attempts < 10:
+                        await asyncio.sleep(3)   # same pacing as closed mode
+                # finalise + skip the closed-mode loop for this god
+                st["got"] = got; st["attempts"] = attempts; st["groups"] = list(groups_used)
+                if got >= target:
+                    st["state"] = "done_met"
+                elif attempts >= 10:
+                    st["state"] = "done_unmet"; st["note"] = "10-attempt limit"
+                elif not groups_used:
+                    st["state"] = "done_unmet"; st["note"] = st.get("note") or "pool out of caps"
+                else:
+                    st["state"] = "done_unmet"; st["note"] = st.get("note") or "pool out of caps"
+                await _live_edit(force=True)
+                continue
 
             gi = 0
             while got < target and attempts < 10 and gi < len(order):
