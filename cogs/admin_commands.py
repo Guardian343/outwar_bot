@@ -25,6 +25,7 @@ from outwar.scraper import (
     parse_character_crew_and_level,
     parse_character_profile,
 )
+from outwar.logger import logger
 
 BASE_URL = "https://sigil.outwar.com"
 
@@ -113,8 +114,11 @@ class AdminCommands(commands.Cog):
             async with cast_lock:
                 await asyncio.gather(*[_cast_one(t) for t in self._guard_trustees])
 
-            print(f"[GUARD] {name} cast on {cast_count}/{len(self._guard_trustees)} accounts"
-                  + (f" ({failed} failed)" if failed else ""))
+            logger.info(
+                "GUARD",
+                f"{name} cast on {cast_count}/{len(self._guard_trustees)} accounts"
+                + (f" ({failed} failed)" if failed else "")
+            )
 
         async def _cast_and_recast(skill_id: int, cooldown_mins: int, name: str):
             while self._guard_running:
@@ -182,7 +186,7 @@ class AdminCommands(commands.Cog):
                     if level > 0:
                         trustee["level"] = level
                 except Exception as e:
-                    print(f"Error enriching {trustee['name']}: {e}")
+                    logger.warning("ADMIN", f"Error enriching {trustee['name']}: {e}")
             return trustee
 
         enriched = await asyncio.gather(*[_enrich(t) for t in raw_trustees])
@@ -287,7 +291,7 @@ class AdminCommands(commands.Cog):
                             "value": getattr(char, stat if stat != "ele" else "elemental", 0)
                         }
                 except Exception as e:
-                    print(f"Error fetching {trustee['name']}: {e}")
+                    logger.warning("ADMIN", f"Error fetching {trustee['name']}: {e}")
                 return None
 
         results = await asyncio.gather(*[_fetch_stat(t) for t in trustees])
@@ -495,16 +499,25 @@ class AdminCommands(commands.Cog):
         others      = [s for s in scanned if not s["destination"]]
 
         # Console dump — paste this back to build the destination->room mapping.
-        print(f"\n===== [KEY-SCAN] {t['name']} (suid={suid}) — {len(items)} keys, "
-              f"{len(reusable)} reusable + {len(consumable)} consumable teleporters =====")
+        lines = [
+            f"===== [KEY-SCAN] {t['name']} (suid={suid}) — {len(items)} keys, "
+            f"{len(reusable)} reusable + {len(consumable)} consumable teleporters ====="
+        ]
+
         for s in scanned:
             if s["destination"]:
                 tag = f"TELEPORT[{s['kind']}] -> {s['destination']}"
             else:
                 tag = "(not a teleporter)"
-            print(f"[KEY-SCAN] name={s['item_name']!r} id={s['item_id']} "
-                  f"qty={s['quantity']} {tag}")
-        print("===== [KEY-SCAN] end =====\n")
+
+            lines.append(
+                f"name={s['item_name']!r} id={s['item_id']} "
+                f"qty={s['quantity']} {tag}"
+            )
+
+        lines.append("===== [KEY-SCAN] end =====")
+
+        logger.info("KEY-SCAN", "\n" + "\n".join(lines))
 
         # Save to KB. Bot only auto-uses reusables; consumables flagged reserved.
         kb = db.get_teleporters()
