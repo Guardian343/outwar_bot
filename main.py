@@ -1,10 +1,10 @@
 import asyncio
 import os
 import discord
+import outwar.logger as logger
 from discord.ext import commands
 from config import load_config
 from outwar.session import OutwarSession, LoginError
-from outwar.logger import logger
 
 
 def _usage_hint(cmd) -> str:
