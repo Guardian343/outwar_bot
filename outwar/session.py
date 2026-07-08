@@ -160,8 +160,11 @@ class OutwarSession:
         path_lower = path.lower()
 
         # Most AJAX endpoints are valid partial responses and should not require
-        # full logged-in page markers.
-        if "ajax" in path_lower:
+        # full logged-in page markers. skills_info.php is a skill-detail fragment
+        # (cooldown/active text) that likewise lacks full-page chrome — treat it as
+        # a valid partial too, otherwise every MD/Last-Stand cooldown check flags
+        # "unknown" and burns 5 retries.
+        if "ajax" in path_lower or "skills_info" in path_lower:
             return True
 
         # JSON response.

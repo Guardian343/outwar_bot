@@ -552,7 +552,7 @@ class PrimeWatcher(commands.Cog):
             if state == "not_spawned":
                 lines.append(f"\U0001F4A4 **{g}** \u2014 not spawned")
             elif state == "met":
-                lines.append(f"\u2705 **{g}** \u2014 target met ({got}/{tgt})")
+                lines.append(f"\u2705 **{g}** \u2014 already at cap ({got}/{tgt}) \u00b7 not raided this cycle")
             elif state == "queued":
                 lines.append(f"\u23F3 **{g}** \u2014 queued ({got}/{tgt})")
             elif state == "raiding":

@@ -1230,7 +1230,19 @@ class BossRaidCommands(commands.Cog):
                         if self._stop_flag:
                             break
                         if damage is None or launch_ts == 0:
-                            # Raid didn't launch — wait 30s before retrying
+                            # Raid didn't launch (no damage / no launch timestamp).
+                            # Previously this skipped SILENTLY, so a failed first raid
+                            # of a cycle looked like "the summary just never posted."
+                            # Make it observable: log why, and notify on the FIRST raid
+                            # specifically (that's the one whose absence is confusing).
+                            _reason = "no damage returned" if damage is None else "raid did not launch"
+                            print(f"[RAID] {current_boss}: first-cycle raid produced nothing "
+                                  f"({_reason}) — retrying in 30s")
+                            if not first_raid_done:
+                                await notify.send(
+                                    f"⚠️ First raid on **{current_boss}** didn't complete "
+                                    f"({_reason}) — retrying in 30s. No summary yet."
+                                )
                             await asyncio.sleep(30)
                             continue
 
