@@ -8,6 +8,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 from bs4 import BeautifulSoup
+from outwar import logger
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +453,7 @@ def parse_bosses(html: str) -> list[Boss]:
                 md_join=md_join,
             ))
         except Exception as e:
-            print(f"Error parsing boss card: {e}")
+            logger.warning("SCRAPER", f"Error parsing boss card: {e}")
 
     return bosses
 
@@ -728,7 +729,7 @@ def parse_gods(html: str) -> list[God]:
             ))
 
         except Exception as e:
-            print(f"Error parsing god: {e}")
+            logger.warning("SCRAPER", f"Error parsing god: {e}")
 
     return gods
 
@@ -768,7 +769,7 @@ def parse_god_stats_page(html: str) -> tuple[list[GodDrop], bool]:
                     loot=loot_str or "No Items",
                 ))
         except Exception as e:
-            print(f"Error parsing god drop row: {e}")
+            logger.warning("SCRAPER", f"Error parsing god drop row: {e}")
 
     return drops, is_dead
 
@@ -943,7 +944,7 @@ def parse_envoys(html: str) -> list[Envoy]:
                         stats_url=stats_url,
                     ))
             except Exception as e:
-                print(f"Error parsing envoy: {e}")
+                logger.warning("SCRAPER", f"Error parsing envoy: {e}")
 
     return envoys
 

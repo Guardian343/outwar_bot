@@ -16,7 +16,7 @@ import asyncio
 import random
 import discord
 from discord.ext import commands
-from outwar import database as db
+from outwar import database as db, logger
 from cogs import embed_style as es
 from outwar.scraper import (
     parse_character_profile,
@@ -115,7 +115,7 @@ class MiscCommands(commands.Cog):
                             "quantity": f.get("quantity", 1),
                         })
                 except Exception as e:
-                    print(f"check-item error for {t['name']}: {e}")
+                    logger.warning("MISC", f"check-item error for {t['name']}: {e}")
 
         await asyncio.gather(*[_check(t) for t in trustees])
 
@@ -183,7 +183,7 @@ class MiscCommands(commands.Cog):
                         if exp >= THRESHOLD_EXP:
                             return {"name": name_node.get_text(strip=True), "exp": exp}
                 except Exception as e:
-                    print(f"eligible error for {t['name']}: {e}")
+                    logger.warning("MISC", f"eligible error for {t['name']}: {e}")
                 return None
 
         raw = await asyncio.gather(*[_check(t) for t in level79])
@@ -360,7 +360,7 @@ class MiscCommands(commands.Cog):
                     )
                     return parse_character_profile(html, t["name"])
                 except Exception as e:
-                    print(f"Error fetching {t['name']}: {e}")
+                    logger.warning("MISC", f"Error fetching {t['name']}: {e}")
                     return None
 
         results = await asyncio.gather(*[_fetch(t) for t in trustees])

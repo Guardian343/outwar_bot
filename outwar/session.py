@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
+from outwar import logger
 
 
 BASE_URL = "https://sigil.outwar.com"
@@ -60,7 +61,7 @@ def _build_session(quiet: bool = False) -> aiohttp.ClientSession:
     )
 
     if not quiet:
-        print(f"[SESSION] HTTP connector: limit_per_host={limit}")
+        logger.info("SESSION", f"HTTP connector: limit_per_host={limit}")
 
     return aiohttp.ClientSession(connector=connector)
 
@@ -136,8 +137,8 @@ class OutwarSession:
         except (ValueError, TypeError):
             self.user_id = 0
 
-        print(f"Got user_id from redirect: {self.user_id}")
-        print("Got session ID from cookie.")
+        logger.info("SESSION", f"Got user_id from redirect: {self.user_id}")
+        logger.info("SESSION", "Got session ID from cookie.")
 
         from datetime import datetime, timezone
         self._last_login = datetime.now(timezone.utc)
@@ -255,9 +256,9 @@ class OutwarSession:
 
         async with self._relogin_lock:
             try:
-                print("Session expired — re-logging in...")
+                logger.warning("SESSION", "Session expired — re-logging in...")
                 await self._do_login()
-                print("Re-login successful.")
+                logger.info("SESSION", "Re-login successful.")
 
                 if self.on_relogin:
                     await self.on_relogin(success=True)
@@ -265,7 +266,7 @@ class OutwarSession:
                 return True
 
             except Exception as e:
-                print(f"Re-login failed: {e}")
+                logger.error("SESSION", f"Re-login failed: {e}")
 
                 if self.on_relogin:
                     await self.on_relogin(success=False, error=str(e))
@@ -324,8 +325,9 @@ class OutwarSession:
                     marker in html_lower
                     for marker in ("too many requests", "rate limit", "slow down")
                 ):
-                    print(
-                        f"[SESSION] Rate limited: {method} {url} "
+                    logger.warning(
+                        "SESSION",
+                        f"Rate limited: {method} {url} "
                         f"attempt {attempt + 1}/{max_attempts}"
                     )
 
@@ -339,8 +341,9 @@ class OutwarSession:
                 # requests and retry. For action requests, do not automatically
                 # repeat the action after re-login because it may have landed.
                 if self._is_logged_out(html):
-                    print(
-                        f"[SESSION] Logged-out response: {method} {url} "
+                    logger.warning(
+                        "SESSION",
+                        f"Logged-out response: {method} {url} "
                         f"attempt {attempt + 1}/{max_attempts}"
                     )
 
@@ -374,8 +377,9 @@ class OutwarSession:
 
                 # Unknown page shape. Keep the HTML for legacy callers and
                 # debugging, but classify it separately from logged-out.
-                print(
-                    f"[SESSION] Unknown response shape: {method} {url} "
+                logger.warning(
+                    "SESSION",
+                    f"Unknown response shape: {method} {url} "
                     f"attempt {attempt + 1}/{max_attempts}"
                 )
 
@@ -390,7 +394,7 @@ class OutwarSession:
                 last_error = "timeout"
 
                 if is_action:
-                    print(f"[SESSION] Action timeout, not retried: {method} {url}")
+                    logger.warning("SESSION", f"Action timeout, not retried: {method} {url}")
 
                     return RequestResult(
                         status=RequestStatus.TIMEOUT,
@@ -402,7 +406,7 @@ class OutwarSession:
                 last_error = str(e)
 
                 if is_action:
-                    print(f"[SESSION] Action client error, not retried: {method} {url}: {e}")
+                    logger.warning("SESSION", f"Action client error, not retried: {method} {url}: {e}")
 
                     return RequestResult(
                         status=RequestStatus.CLIENT_ERROR,
@@ -414,7 +418,7 @@ class OutwarSession:
                 last_error = str(e)
 
                 if is_action:
-                    print(f"[SESSION] Action error, not retried: {method} {url}: {e}")
+                    logger.error("SESSION", f"Action error, not retried: {method} {url}: {e}")
 
                     return RequestResult(
                         status=RequestStatus.ERROR,
@@ -425,16 +429,18 @@ class OutwarSession:
             if not is_action and attempt < max_attempts - 1:
                 wait = min(30.0, 2.0 ** attempt)
 
-                print(
-                    f"[SESSION] Request failed: {method} {url} "
+                logger.warning(
+                    "SESSION",
+                    f"Request failed: {method} {url} "
                     f"attempt {attempt + 1}/{max_attempts}: {last_error}. "
                     f"Retrying in {wait:.0f}s..."
                 )
 
                 await asyncio.sleep(wait)
 
-        print(
-            f"[SESSION] All {max_attempts} attempts failed for "
+        logger.error(
+            "SESSION",
+            f"All {max_attempts} attempts failed for "
             f"{method} {url}: {last_error}"
         )
 

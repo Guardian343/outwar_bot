@@ -14,6 +14,7 @@ from outwar.constants import (
     PRESERVATION_SKILLS, FEROCITY_SKILLS, AFFLICTION_SKILLS, CLASS_SKILLS,
     resolve_skill
 )
+from outwar import logger
 
 BASE_URL = "https://sigil.outwar.com"
 SIGIL_URL = URL("https://sigil.outwar.com")
@@ -199,7 +200,7 @@ class CharacterCommands(commands.Cog):
                     else:
                         not_trained += 1
                 except Exception as e:
-                    print(f"Cast error for {t['name']}: {e}")
+                    logger.warning("GUARD", f"Failed to cast '{skill_name}' for {t['name']}: {e}")
                     failed += 1
 
         await asyncio.gather(*[_cast_one(t) for t in trustees])
@@ -627,7 +628,7 @@ class CharacterCommands(commands.Cog):
                     else:
                         skip_count += 1
             except Exception as e:
-                print(f"Cast group error for {t['name']}: {e}")
+                logger.warning("GUARD", f"Cast group error for {t['name']}: {e}")
             finally:
                 self._switch_to_bot()
             results[t["name"]] = {"cast": cast_count, "skipped": skip_count}
@@ -670,7 +671,7 @@ class CharacterCommands(commands.Cog):
                 if "You just cast" in resp:
                     success += 1
             except Exception as e:
-                print(f"Cast error for {t['name']}: {e}")
+                logger.warning("GUARD", f"Failed to cast '{skill_name}' for {t['name']}: {e}")
             finally:
                 self._switch_to_bot()
 
@@ -724,7 +725,7 @@ class CharacterCommands(commands.Cog):
                             errors.append(f"{t['name']}: {resp_str[:60]}")
                         else:
                             used.append(f"{t['name']} (id:{item['item_id']})")
-                        print(f"[POT] {t['name']} used {potion_name} id={item['item_id']} resp={resp_str[:80]}")
+                        logger.info("POT", f"{t['name']} used {potion_name} id={item['item_id']} resp={resp_str[:80]}")
                         await asyncio.sleep(0.2)
                     else:
                         missing.append(t["name"])
