@@ -17,7 +17,6 @@ admin_commands.py
 import asyncio
 import io
 import discord
-import outwar.logger as logger
 from discord.ext import commands
 from outwar import database as db
 from cogs import embed_style as es
@@ -26,6 +25,7 @@ from outwar.scraper import (
     parse_character_crew_and_level,
     parse_character_profile,
 )
+from outwar import logger
 
 BASE_URL = "https://sigil.outwar.com"
 
