@@ -1481,33 +1481,91 @@ class RaidCommands(commands.Cog):
             _min_to_launch = len(joiners)
 
             async def _join_one(t):
-                """Attempt one join. Returns (joined_ok, capped) based on real status."""
+                """Attempt one join and classify the actual join response."""
                 nonlocal capped_count
+
                 suid = t.get("suid")
+                name = t.get("name", "unknown")
+
                 if not suid:
                     return (False, False)
+
                 try:
                     async with join_semaphore:
                         result = await session.request_result(
-                            "POST", raid_url,
-                            data={"submit": "Join this Raid!", "raidjoin": "1"},
-                            cookies={"ow_userid": str(suid)}, is_action=True,
+                            "POST",
+                            raid_url,
+                            data={
+                                "submit": "Join this Raid!",
+                                "raidjoin": "1",
+                            },
+                            cookies={"ow_userid": str(suid)},
+                            is_action=True,
                         )
-                    # A rate-limited / non-success action did NOT land — report not-joined.
+
                     if result.status != RequestStatus.SUCCESS:
+                        logger.warning(
+                            "RAID",
+                            f"Prime join failed for {name}: status={result.status.value}"
+                        )
                         return (False, False)
+
                     html = result.html or ""
+                    html_lower = html.lower()
+
                     content_start = html.find('<div id="content"')
-                    content_area = html[content_start:content_start+3000] if content_start > 0 else html[5000:10000]
-                    if any(x in content_area.lower() for x in (
-                        "capped", "cap limit", "already reached your",
-                        "you have reached your", "reached the maximum"
-                    )):
+                    content_area = (
+                        html[content_start:content_start + 3000]
+                        if content_start >= 0
+                        else html[:5000]
+                    )
+                    content_lower = content_area.lower()
+
+                    capped_markers = (
+                        "capped",
+                        "cap limit",
+                        "already reached your",
+                        "you have reached your",
+                        "reached the maximum",
+                    )
+
+                    if any(marker in content_lower for marker in capped_markers):
                         capped_count += 1
-                        return (False, True)   # capped: don't retry, won't help
+                        logger.warning(
+                            "RAID",
+                            f"Prime join blocked by cap for {name}"
+                        )
+                        return (False, True)
+
+                    failure_markers = (
+                        "raid is full",
+                        "raid has already launched",
+                        "raid no longer exists",
+                        "invalid raid",
+                        "could not join",
+                        "unable to join",
+                        "not enough rage",
+                    )
+
+                    if any(marker in html_lower for marker in failure_markers):
+                        logger.warning(
+                            "RAID",
+                            f"Prime join rejected for {name}"
+                        )
+                        return (False, False)
+
+                    logger.debug(
+                        "RAID",
+                        f"Prime join response for {name}: {content_area[:500]!r}"
+                    )
+
                     return (True, False)
+
                 except Exception as e:
-                    logger.warning("RAID", f"Join error for {t.get('name')}: {e}")
+                    logger.warning(
+                        "RAID",
+                        f"Prime join error for {name}: {e}"
+                    )
                     return (False, False)
 
             # Round 1: everyone joins.
