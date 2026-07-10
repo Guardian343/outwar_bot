@@ -20,6 +20,7 @@ from outwar import database as db
 from outwar.constants import Skill
 from outwar.scraper import parse_bosses
 from cogs import embed_style as es
+from outwar import logger
 
 SIGIL_URL = URL("https://sigil.outwar.com")
 
@@ -190,14 +191,14 @@ class BossRaidCommands(commands.Cog):
                 "cast":        "Cast Skill",
             }, suid)
             if not resp:
-                print(f"[CAST] {name} (suid={suid}) skill {skill_id} — EMPTY response after all retries")
+                logger.warning("BOSS_RAID", f"[CAST] {name} (suid={suid}) skill {skill_id} — EMPTY response after all retries")
             return resp
 
         async def _cast_account(t):
             suid = t.get("suid")
             if not suid:
                 if CAST_DEBUG:
-                    print(f"[CAST-DEBUG] SKIP {t.get('name','?')} — no suid!")
+                    logger.warning("BOSS_RAID", f"[CAST-DEBUG] SKIP {t.get('name','?')} — no suid!")
                 return
             async with sem:
                 md_recorded   = False
@@ -246,7 +247,7 @@ class BossRaidCommands(commands.Cog):
                                 md_recorded = True
                         elif CAST_DEBUG:
                             # MD didn't cast and isn't active — log the FULL response
-                            print(f"[CAST-DEBUG] {t['name']} (suid={suid}) MD did NOT cast/activate. "
+                            logger.warning("BOSS_RAID", f"[CAST-DEBUG] {t['name']} (suid={suid}) MD did NOT cast/activate. "
                                   f"Response (first 200 chars): {resp[:200]!r}")
                     if skill_id == Skill.LAST_STAND:
                         if "You just cast" in resp or "already cast" in resp_lower:
@@ -261,30 +262,30 @@ class BossRaidCommands(commands.Cog):
                               if out not in ("CAST", "ACTIVE")]
                     md_outcome = next((out for sid, out in skill_results if sid == Skill.MARKDOWN), "?")
                     if failed:
-                        print(f"[CAST-DEBUG] {t['name']} (suid={suid}) MD={md_outcome} "
+                        logger.warning("BOSS_RAID", f"[CAST-DEBUG] {t['name']} (suid={suid}) MD={md_outcome} "
                               f"| {len(skill_results)-len(failed)}/{len(skill_results)} ok "
                               f"| FAILED: {', '.join(failed)}")
                     else:
-                        print(f"[CAST-DEBUG] {t['name']} (suid={suid}) MD={md_outcome} | ALL {len(skill_results)} skills ok")
+                        logger.info("BOSS_RAID", f"[CAST-DEBUG] {t['name']} (suid={suid}) MD={md_outcome} | ALL {len(skill_results)} skills ok")
 
                 if skills_missed:
-                    print(f"[CAST] {t['name']} missed skills: {skills_missed}")
+                    logger.info("BOSS_RAID", f"[CAST] {t['name']} missed skills: {skills_missed}")
 
         if CAST_DEBUG:
-            print(f"[CAST-DEBUG] Starting cast on {len(sorted_t)} accounts. "
+            logger.info("BOSS_RAID", f"[CAST-DEBUG] Starting cast on {len(sorted_t)} accounts. "
                   f"all_skills count = {len(all_skills)}: {all_skills}")
 
         await asyncio.gather(*[_cast_account(t) for t in sorted_t])
 
         if CAST_DEBUG:
-            print(f"[CAST-DEBUG] Cast complete. cast_ok={len(cast_ok)}, "
+            logger.info("BOSS_RAID", f"[CAST-DEBUG] Cast complete. cast_ok={len(cast_ok)}, "
                   f"md_already_active={len(md_already_active)}, "
                   f"total accounts={len(sorted_t)}")
             # List accounts NOT in cast_ok — these are the skipped/failed ones
             not_ok = [t['name'] for t in sorted_t
                       if t.get('suid') and t['suid'] not in cast_ok]
             if not_ok:
-                print(f"[CAST-DEBUG] Accounts NOT in cast_ok ({len(not_ok)}): {', '.join(not_ok)}")
+                logger.warning("BOSS_RAID", f"[CAST-DEBUG] Accounts NOT in cast_ok ({len(not_ok)}): {', '.join(not_ok)}")
 
         # Verification — retry MD only, up to 3 rounds
         for retry_round in range(3):
@@ -324,7 +325,7 @@ class BossRaidCommands(commands.Cog):
             if not missing:
                 break
 
-            print(f"[CAST] Retry {retry_round+1}: {len(missing)} missing MD — "
+            logger.warning("BOSS_RAID", f"[CAST] Retry {retry_round+1}: {len(missing)} missing MD — "
                   f"{', '.join(t['name'] for t in missing)}")
 
             retry_sem = asyncio.Semaphore(5)
@@ -352,7 +353,7 @@ class BossRaidCommands(commands.Cog):
                         if "#outerdiv" in resp and "#inneriframe" in resp:
                             hit_ad_frame = True
                             if CAST_DEBUG:
-                                print(f"[CAST-DEBUG] RETRY MD ad-frame for {t['name']} "
+                                logger.info("BOSS_RAID", f"[CAST-DEBUG] RETRY MD ad-frame for {t['name']} "
                                       f"(suid={suid}) attempt {attempt+1} — retrying")
                             await asyncio.sleep(1.5 * (attempt + 1))
                             continue
@@ -362,7 +363,7 @@ class BossRaidCommands(commands.Cog):
                             return
                         # Readable, non-success response -> genuine failure.
                         if CAST_DEBUG:
-                            print(f"[CAST-DEBUG] RETRY MD failed (readable) for {t['name']} "
+                            logger.warning("BOSS_RAID", f"[CAST-DEBUG] RETRY MD failed (readable) for {t['name']} "
                                   f"(suid={suid}): {resp[:200]!r}")
                         break
                     # SAFEGUARD: if every attempt was blocked by the ad-frame (never a
@@ -377,7 +378,7 @@ class BossRaidCommands(commands.Cog):
             md_assumed_active = set()
             await asyncio.gather(*[_retry_md(t) for t in missing])
             if md_assumed_active:
-                print(f"[CAST] Ad-frame blocked confirmation for {len(md_assumed_active)} "
+                logger.info("BOSS_RAID", f"[CAST] Ad-frame blocked confirmation for {len(md_assumed_active)} "
                       f"account(s) — MD assumed active, KEPT in raid: "
                       f"{', '.join(sorted(md_assumed_active))}")
 
@@ -397,7 +398,7 @@ class BossRaidCommands(commands.Cog):
                 f"🚨 **{len(still_missing_names)} account(s) failed MD after 3 retries** — "
                 f"excluded: {', '.join(still_missing_names)}"
             )
-            print(f"[CAST] HARD FAILURE: {', '.join(still_missing_names)}")
+            logger.error("BOSS_RAID", f"[CAST] HARD FAILURE: {', '.join(still_missing_names)}")
 
         # SiN — single account, rotating, using post_as
         sin_caster = sorted_t[self._sin_index % len(sorted_t)]
@@ -415,7 +416,7 @@ class BossRaidCommands(commands.Cog):
 
         self._sin_index += 1
         sin_name = sin_caster.get("name", "Unknown")
-        print(f"[SiN] Cast on {sin_name}")
+        logger.info("BOSS_RAID", f"[SiN] Cast on {sin_name}")
         self._status.update({
             "sin_name": sin_name,
             "sin_url":  f"https://sigil.outwar.com/profile?transnick={sin_name}&serverid=1",
@@ -441,7 +442,7 @@ class BossRaidCommands(commands.Cog):
                     remaining_list.append(remaining)
         min_remaining = int(min(remaining_list)) if remaining_list else MD_ACTIVE_SECS
         md_cast_time  = now_ts2 + min_remaining - MD_ACTIVE_SECS
-        print(f"[CAST] MD duration: {min_remaining//60:.0f}m remaining (min across {len(remaining_list)} accounts)")
+        logger.info("BOSS_RAID", f"[CAST] MD duration: {min_remaining//60:.0f}m remaining (min across {len(remaining_list)} accounts)")
 
         for t in sorted_t:
             suid = t.get("suid")
@@ -535,22 +536,22 @@ class BossRaidCommands(commands.Cog):
                         ls_cooldown_mins  = 162
                         elapsed_secs      = (ls_cooldown_mins - ls_remaining_mins) * 60
                         ls_cast_at        = datetime.now().timestamp() - elapsed_secs
-                        print(f"[LS] Restart seed — {ls_remaining_mins}m remaining, recast in {ls_remaining_mins + 1}m")
+                        logger.info("BOSS_RAID", f"[LS] Restart seed — {ls_remaining_mins}m remaining, recast in {ls_remaining_mins + 1}m")
                     elif "active" in ls_html.lower() or "cast" in ls_html.lower():
                         # LS is currently active but skills_info shows no remaining text
                         # Treat as just cast — will recast in 163 minutes
                         ls_cast_at = datetime.now().timestamp()
-                        print(f"[LS] Restart seed — LS active, treating as just cast")
+                        logger.info("BOSS_RAID", f"[LS] Restart seed — LS active, treating as just cast")
                     else:
                         # LS ready to cast immediately
                         ls_cast_at = datetime.now().timestamp() - LS_RECAST_SECS
-                        print(f"[LS] Restart seed — LS ready to cast")
+                        logger.info("BOSS_RAID", f"[LS] Restart seed — LS ready to cast")
                     for t in trustees:
                         suid = t.get("suid")
                         if suid:
                             self._ls_cast_times[suid] = ls_cast_at
             except Exception as e:
-                print(f"[LS] Could not seed cast times: {e}")
+                logger.warning("BOSS_RAID", f"[LS] Could not seed cast times: {e}")
 
         while self._running and not self._stop_flag:
             await asyncio.sleep(300)  # check every 5 minutes
@@ -622,7 +623,7 @@ class BossRaidCommands(commands.Cog):
             return total > 0 and enough >= max(5, total * 0.5)
 
         if not _md_has_30min_left():
-            print("[POTS] Under 30 min of MD left — skipping pot cast")
+            logger.info("BOSS_RAID", "[POTS] Under 30 min of MD left — skipping pot cast")
             return  # not enough raiding time left to justify casting pots
 
         # Initial cast — raids have already been announced and started; apply pots
@@ -638,7 +639,7 @@ class BossRaidCommands(commands.Cog):
             # Stop recasting once under 30 min of MD remains — don't waste pots on
             # the tail end of a cycle that's about to stop raiding.
             if not _md_has_30min_left():
-                print("[POTS] Under 30 min of MD left — stopping pot recasts")
+                logger.info("BOSS_RAID", "[POTS] Under 30 min of MD left — stopping pot recasts")
                 break
             result = await self._cast_boss_pots(trustees, boss_name, notify, pot_expiry_ref)
             pot_expiry_ref.update(result)
@@ -660,7 +661,7 @@ class BossRaidCommands(commands.Cog):
                 pot_keys = BOSS_POTS[key]
                 break
         if not pot_keys:
-            print(f"[POTS] No pot config found for boss_key='{boss_key}'")
+            logger.warning("BOSS_RAID", f"[POTS] No pot config found for boss_key='{boss_key}'")
             return pot_expiry or {}
 
         now = datetime.now().timestamp()
@@ -737,12 +738,12 @@ class BossRaidCommands(commands.Cog):
                                     pass  # no suitable level found — skip silently
                             elif "error" in resp_str:
                                 if "do not have permission" not in resp_str:
-                                    print(f"[POTS] {t.get('name','?')}: {pot_key} error: {resp_str[:80]}")
+                                    logger.warning("BOSS_RAID", f"[POTS] {t.get('name','?')}: {pot_key} error: {resp_str[:80]}")
                             else:
                                 pot_counts[pot_key] += 1
                             await asyncio.sleep(0.1)
                 except Exception as e:
-                    print(f"[POTS] error {t.get('name','?')}: {e}")
+                    logger.warning("BOSS_RAID", f"[POTS] error {t.get('name','?')}: {e}")
 
         await asyncio.gather(*[_cast_pots_for(t) for t in trustees])
 
@@ -769,7 +770,7 @@ class BossRaidCommands(commands.Cog):
             if pot_lines:
                 await notify.send("🧪 Potions:\n" + "\n".join(pot_lines))
         else:
-            print(f"[POTS] No potions cast for {boss_name} — accounts may not have pots in backpack")
+            logger.warning("BOSS_RAID", f"[POTS] No potions cast for {boss_name} — accounts may not have pots in backpack")
 
         return pot_expiry
 
@@ -879,7 +880,7 @@ class BossRaidCommands(commands.Cog):
                     boss_costs[boss_key]   = known_costs
                     settings["boss_costs"] = boss_costs
                     db.save_settings(settings)
-                    print(f"Discovered md_form for {boss_key}: {discovered_form}")
+                    logger.info("BOSS_RAID", f"Discovered md_form for {boss_key}: {discovered_form}")
 
             # Get raid URL from forming raids page
             from outwar.scraper import parse_raid_link
@@ -893,10 +894,10 @@ class BossRaidCommands(commands.Cog):
 
             raidid_m = _re.search(r"raidid=(\d+)", raid_url)
             if not raidid_m:
-                print(f"[RAID-DEBUG] No raidid in raid_url: {raid_url!r}")
+                logger.warning("BOSS_RAID", f"[RAID-DEBUG] No raidid in raid_url: {raid_url!r}")
                 return 0, False, 0, False, 0.0
             raidid = raidid_m.group(1)
-            print(f"[RAID-DEBUG] raid_url={raid_url!r} raidid={raidid} former={former.get('name')} (suid={former_suid})")
+            logger.info("BOSS_RAID", f"[RAID-DEBUG] raid_url={raid_url!r} raidid={raidid} former={former.get('name')} (suid={former_suid})")
 
             # Join all accounts concurrently using post_as — no cookie mutation,
             # no sequential blocking. This is critical: the sequential loop was
@@ -940,7 +941,7 @@ class BossRaidCommands(commands.Cog):
             _join_t0 = datetime.now().timestamp()
             await asyncio.gather(*[_join_one(t) for t in joiners])
             _join_secs = datetime.now().timestamp() - _join_t0
-            print(f"[TIMING] join took {_join_secs:.1f}s "
+            logger.info("BOSS_RAID", f"[TIMING] join took {_join_secs:.1f}s "
                   f"({len(joiners)} accounts, concurrency={_join_conc}, "
                   f"host_limit={db.get_settings().get('host_connection_limit', 10)}, "
                   f"rate-limited={_join_ratelimited})")
@@ -954,7 +955,7 @@ class BossRaidCommands(commands.Cog):
                     boss_costs[boss_key]   = known_costs
                     settings["boss_costs"] = boss_costs
                     db.save_settings(settings)
-                    print(f"Discovered md_join for {boss_key}: {discovered_join}")
+                    logger.info("BOSS_RAID", f"Discovered md_join for {boss_key}: {discovered_join}")
 
             await asyncio.sleep(1)  # Brief settle for join requests (was 3s)
 
@@ -963,7 +964,7 @@ class BossRaidCommands(commands.Cog):
                 elapsed = datetime.now().timestamp() - last_launch_ts
                 remainder = max(0, 60 - elapsed)
                 if remainder > 0:
-                    print(f"[RAID] Waiting {remainder:.1f}s before launch (60s game limit)")
+                    logger.info("BOSS_RAID", f"[RAID] Waiting {remainder:.1f}s before launch (60s game limit)")
                     await asyncio.sleep(remainder)
 
             # Launch — get_as has its own internal retry/timeout (25 attempts, 60s each).
@@ -972,21 +973,21 @@ class BossRaidCommands(commands.Cog):
             # endless re-form/re-join/wait loop.
             launch_time = 0.0
             launch_path = f"joinraid.php?raidid={raidid}&launchraid=yes"
-            print(f"[RAID-DEBUG] Launching: {launch_path} as suid={former_suid}")
+            logger.info("BOSS_RAID", f"[RAID-DEBUG] Launching: {launch_path} as suid={former_suid}")
             try:
                 launch_html = await session.get_as(launch_path, former_suid)
                 if launch_html:
                     launch_time = datetime.now().timestamp()
                     _ll = launch_html.lower()
                     if "launch" in _ll or "attack" in _ll or "raid has begun" in _ll or "damage" in _ll:
-                        print(f"[RAID] Launched raid {raidid} OK")
+                        logger.info("BOSS_RAID", f"[RAID] Launched raid {raidid} OK")
                     else:
-                        print(f"[RAID-DEBUG] Launch raid {raidid} unexpected response: {launch_html[:400]!r}")
+                        logger.warning("BOSS_RAID", f"[RAID-DEBUG] Launch raid {raidid} unexpected response: {launch_html[:400]!r}")
                 else:
-                    print(f"[RAID] Launch returned empty for raid {raidid}")
+                    logger.warning("BOSS_RAID", f"[RAID] Launch returned empty for raid {raidid}")
                     return 0, False, 0, False, 0.0
             except Exception as e:
-                print(f"[RAID] Launch error: {e}")
+                logger.warning("BOSS_RAID", f"[RAID] Launch error: {e}")
                 return 0, False, 0, False, 0.0
 
             # Stats collection — either inline (legacy callers) or backgrounded so it
@@ -1004,10 +1005,10 @@ class BossRaidCommands(commands.Cog):
             return r["damage"], False, 0, r["new_record"], launch_time
 
         except asyncio.TimeoutError:
-            print(f"Boss raid timed out for {boss_name}")
+            logger.info("BOSS_RAID", f"Boss raid timed out for {boss_name}")
             return 0, False, 0, False, 0.0
         except Exception as e:
-            print(f"Boss raid error: {e}")
+            logger.warning("BOSS_RAID", f"Boss raid error: {e}")
             return 0, False, 0, False, 0.0
 
     async def _collect_raid_stats(self, raidid, former_suid, boss_name, boss_key, pool_count):
@@ -1051,8 +1052,8 @@ class BossRaidCommands(commands.Cog):
                     db.save_settings(settings)
                     result["new_record"] = True
         except Exception as e:
-            print(f"[RAID] stats collection error: {e}")
-        print(f"[TIMING] stats collection took {datetime.now().timestamp() - _t_stats:.1f}s "
+            logger.warning("BOSS_RAID", f"[RAID] stats collection error: {e}")
+        logger.info("BOSS_RAID", f"[TIMING] stats collection took {datetime.now().timestamp() - _t_stats:.1f}s "
               f"(raid {raidid})")
         return result
 
@@ -1156,10 +1157,10 @@ class BossRaidCommands(commands.Cog):
                         try:
                             _t_spawn = datetime.now().timestamp()
                             spawned = await self._get_spawned_bosses()
-                            print(f"[TIMING] spawned-check took "
+                            logger.info("BOSS_RAID", f"[TIMING] spawned-check took "
                                   f"{datetime.now().timestamp() - _t_spawn:.1f}s")
                         except Exception as e:
-                            print(f"[RAID] Error checking spawned bosses: {e} — retrying in 5s")
+                            logger.warning("BOSS_RAID", f"[RAID] Error checking spawned bosses: {e} — retrying in 5s")
                             await asyncio.sleep(5)
                             continue
 
@@ -1190,14 +1191,14 @@ class BossRaidCommands(commands.Cog):
                         while consecutive_timeouts < MAX_TIMEOUTS:
                             try:
                                 _t_raid = datetime.now().timestamp()
-                                print(f"[TIMING] raid start — background_stats(latch)={first_raid_done}")
+                                logger.info("BOSS_RAID", f"[TIMING] raid start — background_stats(latch)={first_raid_done}")
                                 damage, under_minimum, secs_to_hour, new_record, launch_ts = await asyncio.wait_for(
                                     self._do_boss_raid(sorted_t, current_boss, launch_ts,
                                                        notify=notify,
                                                        background_stats=first_raid_done),
                                     timeout=180
                                 )
-                                print(f"[TIMING] _do_boss_raid returned in "
+                                logger.info("BOSS_RAID", f"[TIMING] _do_boss_raid returned in "
                                       f"{datetime.now().timestamp() - _t_raid:.1f}s")
                                 consecutive_timeouts = 0
                                 break
@@ -1221,8 +1222,8 @@ class BossRaidCommands(commands.Cog):
                                     )
                                     await asyncio.sleep(30)
                             except Exception as e:
-                                print(f"[RAID] Unexpected error in _do_boss_raid: {e}")
-                                print(traceback.format_exc())
+                                logger.warning("BOSS_RAID", f"[RAID] Unexpected error in _do_boss_raid: {e}")
+                                logger.info("BOSS_RAID", traceback.format_exc())
                                 await notify.send(f"🚨 Raid error: `{e}` — retrying in 30s...")
                                 await asyncio.sleep(30)
                                 consecutive_timeouts += 1
@@ -1236,7 +1237,7 @@ class BossRaidCommands(commands.Cog):
                             # Make it observable: log why, and notify on the FIRST raid
                             # specifically (that's the one whose absence is confusing).
                             _reason = "no damage returned" if damage is None else "raid did not launch"
-                            print(f"[RAID] {current_boss}: first-cycle raid produced nothing "
+                            logger.info("BOSS_RAID", f"[RAID] {current_boss}: first-cycle raid produced nothing "
                                   f"({_reason}) — retrying in 30s")
                             if not first_raid_done:
                                 await notify.send(
@@ -1564,7 +1565,7 @@ class BossRaidCommands(commands.Cog):
                     # Only worth flagging if SOME accounts were already active —
                     # if EVERYONE was freshly cast, that's a normal first/cold start
                     names = ", ".join(t["name"] for t in freshly_cast)
-                    print(f"[MD] ⚠️ {len(freshly_cast)} account(s) needed a FRESH cast while "
+                    logger.info("BOSS_RAID", f"[MD] ⚠️ {len(freshly_cast)} account(s) needed a FRESH cast while "
                           f"{len(md_already_active)} others were already active — these were "
                           f"missed in an earlier cast cycle and are now out of sync: {names}")
 
@@ -1589,7 +1590,7 @@ class BossRaidCommands(commands.Cog):
                             drift_desc = ", ".join(
                                 f"{name} ({(ts - group_cast_at) / 60:+.0f}m)" for name, ts in drifted
                             )
-                            print(f"[MD] {len(drifted)} account(s) drifted from group cast time: {drift_desc}")
+                            logger.info("BOSS_RAID", f"[MD] {len(drifted)} account(s) drifted from group cast time: {drift_desc}")
 
                 md_end_times_persist.clear()
                 md_end_times_persist.update(md_end_times)
@@ -1670,7 +1671,7 @@ class BossRaidCommands(commands.Cog):
                     try:
                         spawned = await self._get_spawned_bosses()
                     except Exception as e:
-                        print(f"[RAID] Error fetching spawned bosses: {e} — skipping check")
+                        logger.warning("BOSS_RAID", f"[RAID] Error fetching spawned bosses: {e} — skipping check")
                         spawned = [current_boss]  # assume still alive, don't break
                     if spawned and spawned[0] != current_boss and not manual_lock:
                         cur_priority = BOSS_PRIORITY.index(current_boss) if current_boss in BOSS_PRIORITY else 99
@@ -1711,12 +1712,12 @@ class BossRaidCommands(commands.Cog):
                         try:
                             _t0 = datetime.now().timestamp()
                             _gap = (_t0 - launch_ts) if launch_ts else 0.0
-                            print(f"[TIMING] Loop B raid start — {_gap:.1f}s since last launch")
+                            logger.info("BOSS_RAID", f"[TIMING] Loop B raid start — {_gap:.1f}s since last launch")
                             damage, under_minimum, secs_to_hour, new_record, launch_ts = await asyncio.wait_for(
                                 self._do_boss_raid(sorted_t, current_boss, launch_ts),
                                 timeout=180
                             )
-                            print(f"[TIMING] Loop B _do_boss_raid returned in "
+                            logger.info("BOSS_RAID", f"[TIMING] Loop B _do_boss_raid returned in "
                                   f"{(datetime.now().timestamp() - _t0):.1f}s")
                             consecutive_timeouts = 0
                             break
@@ -1742,8 +1743,8 @@ class BossRaidCommands(commands.Cog):
                                 await asyncio.sleep(30)
                         except Exception as e:
                             import traceback
-                            print(f"[RAID] Unexpected error in _do_boss_raid: {e}")
-                            print(traceback.format_exc())
+                            logger.warning("BOSS_RAID", f"[RAID] Unexpected error in _do_boss_raid: {e}")
+                            logger.info("BOSS_RAID", traceback.format_exc())
                             await notify.send(f"🚨 Raid error: `{e}` — retrying in 30s...")
                             await asyncio.sleep(30)
                             consecutive_timeouts += 1
@@ -1802,7 +1803,7 @@ class BossRaidCommands(commands.Cog):
             crew_name    = self._status.get("source", group_name or "Unknown")
             final_raids  = total_session_raids
             final_damage = total_session_damage
-            print(f"Final summary: raids={final_raids} damage={final_damage}")
+            logger.info("BOSS_RAID", f"Final summary: raids={final_raids} damage={final_damage}")
             from outwar.table_image import render_boss_raid_summary
             buf = render_boss_raid_summary(crew_name, self._status.get("boss", "—"), {
                 "raids":        final_raids,
@@ -1815,7 +1816,7 @@ class BossRaidCommands(commands.Cog):
 
         except Exception as e:
             await ctx.send(f"❌ Autoboss error: {e}")
-            print(f"Autoboss error: {e}")
+            logger.error("BOSS_RAID", f"Autoboss error: {e}")
             if hasattr(self.bot, 'health'):
                 self.bot.health.log_error("autoboss", str(e))
             log_ch_id = db.get_alert_channel("log")
@@ -2031,7 +2032,7 @@ class BossRaidCommands(commands.Cog):
                 try:
                     spawned = await self._get_spawned_bosses()
                 except Exception as e:
-                    print(f"[BOSSRAID] spawn check error: {e}")
+                    logger.warning("BOSS_RAID", f"[BOSSRAID] spawn check error: {e}")
                     spawned = [current_boss]
 
                 if boss:
@@ -2149,7 +2150,7 @@ class BossRaidCommands(commands.Cog):
             f"🗑️ Cleared **{count}** stored MD timestamp(s). "
             f"The next `!autoboss` will re-poll real cooldowns from the game."
         )
-        print(f"[CAST] MD state reset by {ctx.author} — cleared {count} records")
+        logger.info("BOSS_RAID", f"[CAST] MD state reset by {ctx.author} — cleared {count} records")
 
     @commands.command(name="boss-status", aliases=["bstat"])
     async def boss_status_cmd(self, ctx):

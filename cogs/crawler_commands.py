@@ -15,6 +15,7 @@ from collections import deque
 from discord.ext import commands
 from datetime import datetime
 from yarl import URL
+from outwar import logger
 
 SIGIL_URL = URL("https://sigil.outwar.com")
 # Shipped seed map (read-only baseline); crawled output lives in database/ so deploys
@@ -243,7 +244,7 @@ class CrawlerCommands(commands.Cog):
                     parsed = parse_room_payload(raw)
                 except Exception as e:
                     self._stats["errors"] += 1
-                    print(f"Crawl error moving {current}->{nxt}: {e}")
+                    logger.warning("CRAWLER", f"Failed to move from room {current} to {nxt}: {e}")
                     continue
 
                 if parsed is None:
@@ -290,7 +291,7 @@ class CrawlerCommands(commands.Cog):
 
         except Exception as e:
             await ctx.send(f"❌ Crawl failed: {e}")
-            print(f"Crawl fatal error: {e}")
+            logger.error("CRAWLER", f"Fatal crawl error: {e}")
         finally:
             self._crawling = False
 

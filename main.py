@@ -4,6 +4,7 @@ import discord
 from discord.ext import commands
 from config import load_config
 from outwar.session import OutwarSession, LoginError
+from outwar import logger
 
 
 def _usage_hint(cmd) -> str:
@@ -28,13 +29,13 @@ async def main():
     bot = commands.Bot(command_prefix=config["prefix"], intents=intents, help_command=None)
 
     # Login to Outwar
-    print("Logging into Outwar...")
+    logger.info("MAIN", "Logging into Outwar...")
     session = OutwarSession()
     try:
         await session.login(config["username"], config["password"])
-        print(f"Outwar login successful — username: {config['username']}, user_id: {session.user_id}")
+        logger.info("SESSION", f"Outwar login successful — username: {config['username']}, user_id: {session.user_id}")
     except LoginError as e:
-        print(f"ERROR: {e}")
+        logger.error("SESSION", f"Outwar login failed: {e}")
         return
 
     bot.outwar    = session
@@ -80,35 +81,35 @@ async def main():
     for extension in extensions:
         try:
             await bot.load_extension(extension)
-            print(f"Loaded {extension}")
+            logger.info("COGS", f"Loaded {extension}")
         except Exception as e:
-            print(f"Failed to load {extension}: {e}")
+            logger.error("COGS", f"Failed to load {extension}: {e}")
 
     @bot.event
     async def on_ready():
-        print(f"Bot ready as {bot.user}")
+        logger.info("MAIN", f"Bot ready as {bot.user}")
         channel = bot.get_channel(config["channel"])
         if channel:
             await channel.send("DeathBot is online")
         else:
-            print(f"Warning: could not find channel ID {config['channel']} — check your config.json channel IDs")
+            logger.warning("MAIN", f"Could not find channel ID {config['channel']} — check your config.")
 
     @bot.event
     async def on_command_error(ctx, error):
         from cogs.auth import unauth_gif, is_authorised
         from outwar.database import get_alert_channel
         if isinstance(error, commands.CheckFailure):
-            print(f"[AUTH] CheckFailure for {ctx.author} ({ctx.author.id}) running !{ctx.command}: {error}")
+            logger.warning("AUTH", f"CheckFailure for {ctx.author} ({ctx.author.id}) running !{ctx.command}: {error}")
             try:
                 await ctx.send(unauth_gif())
             except Exception as send_err:
                 # GIF send failed (embed perms, etc.) — fall back to plain text so
                 # the user still gets a clear response, and log why for the owner.
-                print(f"[AUTH] Failed to send unauthorised GIF: {send_err}")
+                logger.warning("AUTH", f"Failed to send unauthorised GIF: {send_err}")
                 try:
                     await ctx.send("🚫 You don't have access to that command yet. Ask an admin to add you.")
                 except Exception as send_err2:
-                    print(f"[AUTH] Fallback text also failed: {send_err2}")
+                    logger.error("AUTH", f"Fallback unauthorised message also failed: {send_err2}")
         elif isinstance(error, commands.CommandNotFound):
             # No-access users get the GIF for anything they type. Authorised users
             # get a helpful "unknown command" nudge so typos aren't silently ignored.
@@ -146,7 +147,7 @@ async def main():
         else:
             cmd      = ctx.command.name if ctx.command else "unknown"
             err_str  = str(error)
-            print(f"Command error in {cmd}: {err_str}")
+            logger.error("COMMAND", f"{cmd}: {err_str}")
             await ctx.send("An error occurred while running that command. Check the log channel.")
             # Log to health monitor
             if hasattr(bot, 'health'):

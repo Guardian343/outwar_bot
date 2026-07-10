@@ -23,7 +23,7 @@ from discord.ext import commands
 
 from cogs import embed_style as es
 from cogs.auth import is_authorised
-from outwar import database as db
+from outwar import database as db, logger
 from outwar.scraper import parse_prime_god_page
 
 SKILL_CHOICES = ("none", "class", "raid")
@@ -65,7 +65,7 @@ class PrimeWatcher(commands.Cog):
             try:
                 self._task = asyncio.create_task(self._scheduler())
             except Exception as e:
-                print(f"[PW] failed to start scheduler: {e}")
+                logger.error("PW", f"failed to start scheduler: {e}")
 
     def cog_unload(self):
         if self._task:
@@ -451,7 +451,7 @@ class PrimeWatcher(commands.Cog):
             try:
                 await self._run_all_enabled()
             except Exception as e:
-                print(f"[PW] scheduler cycle error: {e}")
+                logger.error("PW", f"scheduler cycle error: {e}")
 
     async def _report_channel(self, w):
         """Resolve where to post: the watcher's own channel, else the Log/#primewatcher
@@ -485,7 +485,7 @@ class PrimeWatcher(commands.Cog):
             try:
                 await self._run_cycle(w, dry_run, ch)
             except Exception as e:
-                print(f"[PW] cycle error for {w.get('name')}: {e}")
+                logger.error("PW", f"cycle error for {w.get('name')}: {e}")
                 if ch:
                     await ch.send(f"⚠️ Prime Watcher **{w.get('name')}** cycle error: `{e}`")
 
@@ -529,7 +529,7 @@ class PrimeWatcher(commands.Cog):
                                + BOSS_SKILLS_MISC)
                 await char_cog._cast_skill_group(_Shim(channel), group_name, raid_skills, "Raid Skills")
         except Exception as e:
-            print(f"[PW] skill cast failed for {group_name}: {e}")
+            logger.warning("PW", f"skill cast failed for {group_name}: {e}")
 
     @staticmethod
     def _hp_from_note(note):

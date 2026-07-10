@@ -18,6 +18,7 @@ from outwar.scraper import (
     unscramble_loot, God, Envoy,
 )
 from cogs import embed_style as es
+from outwar import logger
 
 BASE_URL   = "https://sigil.outwar.com"
 from yarl import URL as _URL
@@ -111,7 +112,7 @@ class GodMonitor(commands.Cog):
             self.boss_poll_loop.start()
             self.daily_summary_loop.start()
             self.session_check_loop.start()
-            print("God and boss monitors started.")
+            logger.info("GOD_MONITOR", "God and boss monitors started.")
             await self._post_startup_state()
 
     def cog_unload(self):
@@ -223,7 +224,7 @@ class GodMonitor(commands.Cog):
                     pass
 
         except Exception as e:
-            print(f"Session check error: {e}")
+            logger.warning("GOD_MONITOR", f"Session check error: {e}")
 
     @tasks.loop(minutes=1)
     async def daily_summary_loop(self):
@@ -264,7 +265,7 @@ class GodMonitor(commands.Cog):
                     )
                     await god_channel.send(embed=embed)
         except Exception as e:
-            print(f"Startup god state error: {e}")
+            logger.warning("GOD_MONITOR", f"Startup god state error: {e}")
 
         # --- Bosses ---
         try:
@@ -282,7 +283,7 @@ class GodMonitor(commands.Cog):
                     )
                     await boss_channel.send(embed=embed)
         except Exception as e:
-            print(f"Startup boss state error: {e}")
+            logger.warning("GOD_MONITOR", f"Startup boss state error: {e}")
 
     # ------------------------------------------------------------------
     # Poll logic
@@ -298,7 +299,7 @@ class GodMonitor(commands.Cog):
             await self._process_god_changes(gods)
             await self._process_envoy_changes(envoys)
         except Exception as e:
-            print(f"God monitor poll error: {e}")
+            logger.warning("GOD_MONITOR", f"God monitor poll error: {e}")
 
     async def _poll_bosses(self):
         try:
@@ -306,7 +307,7 @@ class GodMonitor(commands.Cog):
             bosses = parse_bosses(html)
             await self._process_boss_changes(bosses)
         except Exception as e:
-            print(f"Boss monitor poll error: {e}")
+            logger.warning("GOD_MONITOR", f"Boss monitor poll error: {e}")
 
     # ------------------------------------------------------------------
     # Change processing
@@ -356,7 +357,7 @@ class GodMonitor(commands.Cog):
                                 spawnid = sm.group(1)
                                 return f"• [**{g.name}**](http://sigil.outwar.com/primegod_loot?spawnid={spawnid})"
                     except Exception as e:
-                        print(f"[GODS] Could not resolve loot link for {g.name}: {e}")
+                        logger.warning("GOD_MONITOR", f"[GODS] Could not resolve loot link for {g.name}: {e}")
                     # Fallback: name with no link rather than a broken link
                     return f"• **{g.name}**"
 
@@ -460,7 +461,7 @@ class GodMonitor(commands.Cog):
                 try:
                     db.record_boss_death(boss.full_name)
                 except Exception as e:
-                    print(f"[BOSS] could not record death time for {boss.full_name}: {e}")
+                    logger.warning("GOD_MONITOR", f"[BOSS] could not record death time for {boss.full_name}: {e}")
 
         if channel:
             if entered_window:
@@ -487,7 +488,7 @@ class GodMonitor(commands.Cog):
                 drops_channel = await self._get_alert_channel("drops") or channel
 
                 for boss in just_died:
-                    print(f"[DROPS] boss={boss.full_name} stats_url={boss.stats_url}")
+                    logger.info("GOD_MONITOR", f"[DROPS] boss={boss.full_name} stats_url={boss.stats_url}")
                     if boss.stats_url:
                         try:
                             await asyncio.sleep(15)  # let stats page settle after death
@@ -495,9 +496,9 @@ class GodMonitor(commands.Cog):
                             stats_html = await self.session.get(boss.stats_url)
                             soup = BeautifulSoup(stats_html, "lxml")
                             rows = soup.select("#content-header-row div table tbody tr")
-                            print(f"[DROPS] {boss.full_name}: html_len={len(stats_html)} rows_found={len(rows)}")
+                            logger.info("GOD_MONITOR", f"[DROPS] {boss.full_name}: html_len={len(stats_html)} rows_found={len(rows)}")
                             if not rows:
-                                print(f"[DROPS] {boss.full_name} preview: {stats_html[:300]!r}")
+                                logger.info("GOD_MONITOR", f"[DROPS] {boss.full_name} preview: {stats_html[:300]!r}")
 
                             drop_embed = es.drops_embed(
                                 f"{es.ICON_DROPS} {boss.full_name} — Drop Summary"
@@ -573,7 +574,7 @@ class GodMonitor(commands.Cog):
                                     f"{es.ICON_DROPS} **{boss.full_name}** died but no drop data was found on the stats page."
                                 )
                         except Exception as e:
-                            print(f"Error fetching boss drops: {e}")
+                            logger.warning("GOD_MONITOR", f"Error fetching boss drops: {e}")
 
         self._last_bosses = new_state
         db.save_boss_state(new_state)
@@ -795,7 +796,7 @@ class GodMonitor(commands.Cog):
                 await channel.send(embed=embed)
 
         except Exception as e:
-            print(f"Daily summary error: {e}")
+            logger.warning("GOD_MONITOR", f"Daily summary error: {e}")
 
     async def _post_envoy_drops(self, envoy):
         from outwar.scraper import parse_prime_god_loot, get_latest_envoy_pool
@@ -803,11 +804,11 @@ class GodMonitor(commands.Cog):
         try:
             drops_channel = await self._get_alert_channel("envoys") or await self._get_alert_channel("drops") or await self._get_alert_channel("gods")
             if not drops_channel:
-                print(f"[DROPS] No drops channel for envoy {envoy.name}")
+                logger.warning("GOD_MONITOR", f"[DROPS] No drops channel for envoy {envoy.name}")
                 return
             target_id = envoy.envoy_id if envoy.envoy_id > 0 else None
             if not target_id:
-                print(f"[DROPS] No target_id for {envoy.name}")
+                logger.warning("GOD_MONITOR", f"[DROPS] No target_id for {envoy.name}")
                 return
             settings = db.get_settings()
             pool_number = settings.get("envoy_loot_pool", 49)
@@ -816,34 +817,34 @@ class GodMonitor(commands.Cog):
                 sse_m = _re.search(r"spawnid=(\d+)&envoyid=\d+", envoy_page)
                 if sse_m:
                     pool_number = int(sse_m.group(1))
-                    print(f"[DROPS] {envoy.name}: pool={pool_number} from page SSE URL")
+                    logger.info("GOD_MONITOR", f"[DROPS] {envoy.name}: pool={pool_number} from page SSE URL")
                 else:
                     detected = get_latest_envoy_pool(envoy_page)
                     if detected:
                         pool_number = detected + 1
-                        print(f"[DROPS] {envoy.name}: history max={detected}, trying pool={pool_number}")
+                        logger.info("GOD_MONITOR", f"[DROPS] {envoy.name}: history max={detected}, trying pool={pool_number}")
             except Exception as e:
-                print(f"[DROPS] Pool detect failed for {envoy.name}: {e}, using {pool_number}")
+                logger.warning("GOD_MONITOR", f"[DROPS] Pool detect failed for {envoy.name}: {e}, using {pool_number}")
             sse_url = f"ajax/timedgod_loot_sse.php?spawnid={pool_number}&envoyid={target_id}"
-            print(f"[DROPS] Envoy SSE: {sse_url}")
+            logger.info("GOD_MONITOR", f"[DROPS] Envoy SSE: {sse_url}")
             loot_by_crew = []
             sse_data = None
             # Envoy loot pools are large — rolling can take 30+ minutes.
             # Use a 60-minute timeout and retry up to 3 times on failure.
             for attempt in range(3):
                 try:
-                    print(f"[DROPS] {envoy.name} SSE attempt {attempt+1} (up to 60 min wait)...")
+                    logger.info("GOD_MONITOR", f"[DROPS] {envoy.name} SSE attempt {attempt+1} (up to 60 min wait)...")
                     sse_data = await self.session.get_sse(sse_url, timeout_secs=3600)
                     if sse_data and len(sse_data) > 100:
                         loot_by_crew = parse_prime_god_loot(sse_data)
                         if loot_by_crew:
-                            print(f"[DROPS] {envoy.name} got {len(loot_by_crew)} winners")
+                            logger.info("GOD_MONITOR", f"[DROPS] {envoy.name} got {len(loot_by_crew)} winners")
                             break
-                        print(f"[DROPS] {envoy.name} SSE len={len(sse_data)} no loot parsed — retrying")
+                        logger.warning("GOD_MONITOR", f"[DROPS] {envoy.name} SSE len={len(sse_data)} no loot parsed — retrying")
                     else:
-                        print(f"[DROPS] {envoy.name} SSE too short: {len(sse_data) if sse_data else 0}")
+                        logger.info("GOD_MONITOR", f"[DROPS] {envoy.name} SSE too short: {len(sse_data) if sse_data else 0}")
                 except Exception as e:
-                    print(f"[DROPS] {envoy.name} attempt {attempt+1} failed: {e}")
+                    logger.warning("GOD_MONITOR", f"[DROPS] {envoy.name} attempt {attempt+1} failed: {e}")
                 if attempt < 2:
                     await asyncio.sleep(30)
             else:
@@ -881,8 +882,8 @@ class GodMonitor(commands.Cog):
                 await drops_channel.send(embed=embed)
         except Exception as e:
             import traceback
-            print(f"[DROPS] Error posting envoy drops for {envoy.name}: {e}")
-            print(traceback.format_exc())
+            logger.warning("GOD_MONITOR", f"[DROPS] Error posting envoy drops for {envoy.name}: {e}")
+            logger.info("GOD_MONITOR", traceback.format_exc())
 
     async def _post_god_drops(self, channel, god: God):
         try:
@@ -890,39 +891,39 @@ class GodMonitor(commands.Cog):
             data     = parse_prime_god_page(god_html)
             loot_url = data.get("loot_url")
             if not loot_url:
-                print(f"[DROPS] No loot_url found for {god.name}")
+                logger.warning("GOD_MONITOR", f"[DROPS] No loot_url found for {god.name}")
                 return
 
             import re as _re
             spawn_m = _re.search(r"spawnid=(\d+)", loot_url)
             if not spawn_m:
-                print(f"[DROPS] No spawnid in {loot_url}")
+                logger.warning("GOD_MONITOR", f"[DROPS] No spawnid in {loot_url}")
                 return
             spawnid = spawn_m.group(1)
 
             # Fetch SSE stream directly — this blocks until loot is complete
             sse_url  = f"ajax/timedgod_loot_sse.php?spawnid={spawnid}&envoyid=0"
-            print(f"[DROPS] Fetching SSE: {sse_url}")
+            logger.info("GOD_MONITOR", f"[DROPS] Fetching SSE: {sse_url}")
             sse_data = None
             for attempt in range(5):
                 try:
                     sse_data = await self.session.get_sse(sse_url)
                     if sse_data and len(sse_data) > 50:
                         break
-                    print(f"[DROPS] SSE attempt {attempt+1} too short: {len(sse_data) if sse_data else 0}")
+                    logger.info("GOD_MONITOR", f"[DROPS] SSE attempt {attempt+1} too short: {len(sse_data) if sse_data else 0}")
                 except Exception as e:
-                    print(f"[DROPS] SSE fetch attempt {attempt+1} failed: {e}")
+                    logger.warning("GOD_MONITOR", f"[DROPS] SSE fetch attempt {attempt+1} failed: {e}")
                 if attempt < 4:
                     await asyncio.sleep(10)
 
             if not sse_data:
-                print(f"[DROPS] All SSE fetch attempts failed for {god.name}")
+                logger.warning("GOD_MONITOR", f"[DROPS] All SSE fetch attempts failed for {god.name}")
                 return
 
 
             from outwar.scraper import parse_prime_god_loot
             loot_by_crew = parse_prime_god_loot(sse_data)
-            print(f"[DROPS] loot_by_crew count={len(loot_by_crew)}")
+            logger.info("GOD_MONITOR", f"[DROPS] loot_by_crew count={len(loot_by_crew)}")
 
             # Persist focused-crew drops for the daily summary
             self._record_focus_drops(loot_by_crew)
@@ -933,7 +934,7 @@ class GodMonitor(commands.Cog):
 
             drops_channel = await self._get_alert_channel("drops") or channel
             if not drops_channel:
-                print(f"[DROPS] No drops channel configured")
+                logger.warning("GOD_MONITOR", f"[DROPS] No drops channel configured")
                 return
 
             # ── Build the with-drops list, enriched with kills from stats ──
@@ -1016,12 +1017,12 @@ class GodMonitor(commands.Cog):
             if embed.fields:
                 await drops_channel.send(embed=embed)
             elif not crews_with_drops and not no_drops:
-                print(f"[DROPS] Nothing to post for {god.name}")
+                logger.info("GOD_MONITOR", f"[DROPS] Nothing to post for {god.name}")
 
         except Exception as e:
             import traceback
-            print(f"Error posting god drops: {e}")
-            print(traceback.format_exc())
+            logger.warning("GOD_MONITOR", f"Error posting god drops: {e}")
+            logger.info("GOD_MONITOR", traceback.format_exc())
 
     # ------------------------------------------------------------------
     # Commands
@@ -1306,7 +1307,7 @@ class GodMonitor(commands.Cog):
                     await ctx.send(embed=embed)
                     return
         except Exception as e:
-            print(f"Envoy drops error: {e}")
+            logger.warning("GOD_MONITOR", f"Envoy drops error: {e}")
         await ctx.send(f"No drop data found for **{envoy.name}**.")
 
     @commands.command(name="poll-now")
@@ -1377,7 +1378,7 @@ class GodMonitor(commands.Cog):
             await self._post_daily_summary()
         except Exception as e:
             await ctx.send(f"\u274c Error: `{e}`")
-            print(f"summary-now error: {e}")
+            logger.warning("GOD_MONITOR", f"summary-now error: {e}")
 
     @commands.command(name="summary-set")
     async def summary_set(self, ctx, *, crew_name: str):
@@ -1462,10 +1463,10 @@ class GodMonitor(commands.Cog):
                 merged_points += entry.get("points", 0) or 0
             if any_focus and (merged_items or merged_points):
                 db.record_focus_drops(today, merged_items, merged_points)
-                print(f"[DROPS] Recorded focused drops for {today}: "
+                logger.info("GOD_MONITOR", f"[DROPS] Recorded focused drops for {today}: "
                       f"{sum(merged_items.values())} items, {merged_points} points")
         except Exception as e:
-            print(f"[DROPS] focus-drop record failed: {e}")
+            logger.warning("GOD_MONITOR", f"[DROPS] focus-drop record failed: {e}")
 
     async def _get_alert_channel(self, alert_type: str):
         channel_id = db.get_alert_channel(alert_type)

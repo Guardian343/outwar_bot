@@ -9,7 +9,7 @@ import discord
 from discord.ext import commands
 from datetime import datetime, timezone
 from yarl import URL
-from outwar import database as db
+from outwar import database as db, logger
 from cogs import embed_style as es
 from outwar.scraper import (
     parse_gods,
@@ -146,7 +146,7 @@ async def _fetch_loot_page(session, loot_url: str, god_id: int) -> str:
                             break
                         events.append(data)
     except Exception as e:
-        print(f"SSE fetch error: {e}")
+        logger.warning("RAID", f"SSE fetch error: {e}")
 
     if events:
         pass
@@ -272,7 +272,7 @@ class RaidCommands(commands.Cog):
                         if page_data.get(key):
                             entry[key] = page_data[key]
                 except Exception as e:
-                    print(f"Could not fetch god page for {god.name}: {e}")
+                    logger.warning("RAID", f"Could not fetch god page for {god.name}: {e}")
                 return entry
 
         entries = await asyncio.gather(*[_fetch_god_page(g) for g in gods])
@@ -932,7 +932,7 @@ class RaidCommands(commands.Cog):
                 pass
             return spawned
         except Exception as e:
-            print(f"[RAID] Live spawn check failed for {god.get('name')}: {e}")
+            logger.warning("RAID", f"Live spawn check failed for {god.get('name')}: {e}")
             return bool(god.get("spawned"))
 
     @commands.command(name="rm")
@@ -1250,7 +1250,7 @@ class RaidCommands(commands.Cog):
     async def _do_god_raid(self, ctx, god: dict, trustees: list, cap_cache: dict = None, debug_log: list = None) -> tuple[bool, int, str]:
         """Form and launch a raid on a Prime God. Returns (won, damage, note)."""
         def dbg(m):
-            print(f"[RAID] {m}")
+            logger.debug("RAID", m)
             if debug_log is not None:
                 debug_log.append(m)
 
@@ -1388,7 +1388,7 @@ class RaidCommands(commands.Cog):
                                             former_suid = suid
 
                         except Exception as e:
-                            print(f"Navigation error for {t.get('name')}: {e}")
+                            logger.warning("RAID", f"Navigation error for {t.get('name')}: {e}")
 
                 # Try each trustee as former until one can form (not capped)
                 for candidate in sorted_trustees:
@@ -1507,7 +1507,7 @@ class RaidCommands(commands.Cog):
                         return (False, True)   # capped: don't retry, won't help
                     return (True, False)
                 except Exception as e:
-                    print(f"Join error for {t.get('name')}: {e}")
+                    logger.warning("RAID", f"Join error for {t.get('name')}: {e}")
                     return (False, False)
 
             # Round 1: everyone joins.
@@ -1601,7 +1601,7 @@ class RaidCommands(commands.Cog):
                             avg_ele   = sum(s.get("elemental", 0) for s in stat_results) // len(stat_results)
                             db.record_raid_win(god["name"], god_id, avg_power, avg_ele, len(stat_results))
                     except Exception as e:
-                        print(f"Win stat recording error: {e}")
+                        logger.warning("RAID", f"Win stat recording error: {e}")
 
                 asyncio.create_task(_record_win_stats())
 
@@ -1661,7 +1661,7 @@ class RaidCommands(commands.Cog):
             return won, damage, note
 
         except Exception as e:
-            print(f"God raid error: {e}")
+            logger.error("RAID", f"God raid error: {e}")
             return False, 0, None
         finally:
             session._session.cookie_jar.update_cookies(
@@ -1817,7 +1817,7 @@ class RaidCommands(commands.Cog):
                                         former      = t
                                         former_suid = suid
                     except Exception as e:
-                        print(f"Navigation error for {t.get('name')}: {e}")
+                        logger.warning("RAID", f"Navigation error for {t.get('name')}: {e}")
 
             for candidate in sorted_trustees:
                 await _navigate(candidate, try_as_former=True)
@@ -1870,13 +1870,13 @@ class RaidCommands(commands.Cog):
                     _lim = parse_join_limits(_raid_page)
                     if _lim:
                         db.set_join_limit(_alias, _lim[0], _lim[1])
-                        print(f"[SLAYER] Learned join limits for {mob['name']}: "
+                        logger.info("SLAYER", f"Learned join limits for {mob['name']}: "
                               f"{_lim[0]}-{_lim[1]} (saved)")
                     else:
-                        print(f"[SLAYER] Could not parse join limits for {mob['name']} "
+                        logger.warning("SLAYER", f"Could not parse join limits for {mob['name']} "
                               f"— will size on next encounter")
                 except Exception as _e:
-                    print(f"[SLAYER] Join-limit learn error for {mob['name']}: {_e}")
+                    logger.warning("SLAYER", f"Join-limit learn error for {mob['name']}: {_e}")
 
             # Join concurrently
             join_semaphore = asyncio.Semaphore(10)
@@ -1890,7 +1890,7 @@ class RaidCommands(commands.Cog):
                             "submit": "Join this Raid!", "raidjoin": "1"
                         }, suid)
                 except Exception as e:
-                    print(f"Join error for {t['name']}: {e}")
+                    logger.warning("RAID", f"Join error for {t['name']}: {e}")
 
             await asyncio.gather(*[_join_world(t) for t in joiners])
             await asyncio.sleep(0.5)
@@ -1940,7 +1940,7 @@ class RaidCommands(commands.Cog):
             return won, damage, drops
 
         except Exception as e:
-            print(f"World raid error: {e}")
+            logger.error("RAID", f"World raid error: {e}")
             return False, 0, None
         finally:
             session._session.cookie_jar.update_cookies(
