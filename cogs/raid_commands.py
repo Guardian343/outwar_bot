@@ -1481,7 +1481,7 @@ class RaidCommands(commands.Cog):
             _min_to_launch = len(joiners)
 
             async def _join_one(t):
-                """Attempt one join and classify the actual join response."""
+                """Attempt one join and reject known game-level failure responses."""
                 nonlocal capped_count
 
                 suid = t.get("suid")
@@ -1529,11 +1529,16 @@ class RaidCommands(commands.Cog):
                         "reached the maximum",
                     )
 
-                    if any(marker in content_lower for marker in capped_markers):
+                    capped_marker = next(
+                        (marker for marker in capped_markers if marker in content_lower),
+                        None
+                    )
+
+                    if capped_marker:
                         capped_count += 1
                         logger.warning(
                             "RAID",
-                            f"Prime join blocked by cap for {name}"
+                            f"Prime join blocked by cap for {name}: {capped_marker}"
                         )
                         return (False, True)
 
@@ -1547,16 +1552,22 @@ class RaidCommands(commands.Cog):
                         "not enough rage",
                     )
 
-                    if any(marker in html_lower for marker in failure_markers):
+                    failure_marker = next(
+                        (marker for marker in failure_markers if marker in html_lower),
+                        None
+                    )
+
+                    if failure_marker:
                         logger.warning(
                             "RAID",
-                            f"Prime join rejected for {name}"
+                            f"Prime join rejected for {name}: {failure_marker}"
                         )
                         return (False, False)
 
                     logger.debug(
                         "RAID",
-                        f"Prime join response for {name}: {content_area[:500]!r}"
+                        f"Prime join response had no known rejection marker for {name}: "
+                        f"{content_area[:500]!r}"
                     )
 
                     return (True, False)
