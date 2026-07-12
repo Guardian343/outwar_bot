@@ -320,9 +320,47 @@ def parse_rage(html: str) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------------
-# Boss scraping
-# ---------------------------------------------------------------------------
+def parse_rage_cost(html: str) -> dict:
+    """
+    Read the STATED rage cost off a raid form/join page.
+
+    Outwar's form and join pages both contain a line of the exact form:
+        (It will take <b> 2500 </b> of your <b> 64,767 </b> rage to form raid)
+        (It will take <b> 270 </b> of your <b> 1,013 </b> rage to join this raid)
+
+    This is the authoritative cost for the CURRENT account in its CURRENT state,
+    so it is automatically correct for whether MD (Master's Disk) is active or not
+    — no need to store separate with/without-MD values or measure before/after a
+    join (which is what the boss path historically did indirectly). Reading the
+    number directly is exact and works BEFORE the action is taken, which lets
+    pre-flight block an under-rage form/join before it happens.
+
+    Returns a dict:
+        {"cost": int, "current": int, "action": "form"|"join"}  on a match, or
+        {} if the line isn't present (e.g. the account already has enough context,
+        or the page isn't a form/join page).
+
+    Works identically for boss and prime pages — the only difference is the
+    trailing action text ("to form raid" vs "to join this raid").
+    """
+    if not html:
+        return {}
+    # Tolerant of the <b> tags, whitespace, and comma-grouped numbers. The action
+    # word ("form" / "join") is captured so callers know which cost this is.
+    m = re.search(
+        r"It will take\s*(?:<b>)?\s*([\d,]+)\s*(?:</b>)?\s*of your\s*"
+        r"(?:<b>)?\s*([\d,]+)\s*(?:</b>)?\s*rage\s*to\s*(form|join)",
+        html, re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return {}
+    try:
+        cost = int(m.group(1).replace(",", ""))
+        current = int(m.group(2).replace(",", ""))
+    except ValueError:
+        return {}
+    action = "form" if m.group(3).lower() == "form" else "join"
+    return {"cost": cost, "current": current, "action": action}
 
 def _md(cost: int) -> int:
     """Rage cost with Markdown Level 10 active (75% reduction)."""

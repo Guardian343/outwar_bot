@@ -1429,6 +1429,36 @@ class RaidCommands(commands.Cog):
                 pre_capped_count = 0
 
             # Form the raid (as the former, per-request cookie)
+            # ---- LIVE FORM-RAGE CHECK (before forming) ----
+            # The form page states the exact rage it will cost THIS former to form,
+            # in its CURRENT MD state: "(It will take X of your Y rage to form raid)".
+            # Read it live (authoritative + MD-correct), populate the god's stored
+            # rage_to_form so it's visible/available, and DON'T form if the former
+            # lacks the rage — that's a persistent pre-flight failure, caught before
+            # we commit to forming.
+            from outwar.scraper import parse_rage_cost as _prc
+            if form_url and former_suid:
+                try:
+                    _form_page = await session.get_as(form_url, former_suid)
+                    _fc = _prc(_form_page)
+                    if _fc.get("action") == "form":
+                        # Persist the discovered form cost on the god (self-refreshing).
+                        try:
+                            if god.get("god_id"):
+                                db.update_prime_god(god["god_id"], {"rage_to_form": _fc["cost"]})
+                        except Exception:
+                            pass
+                        if _fc["current"] < _fc["cost"]:
+                            dbg(f"Raid not formed — former {former['name']} low rage to FORM: "
+                                f"has {_fc['current']:,}, needs {_fc['cost']:,}")
+                            return False, 0, (
+                                f"Raid not formed — low rage to form "
+                                f"(former {former['name']} has {_fc['current']:,}, "
+                                f"needs {_fc['cost']:,})"
+                            )
+                except Exception as _e_fc:
+                    dbg(f"form-rage read failed (continuing): {_e_fc}")
+
             if form_url:
                 await session.post_as(form_url, {
                     "formtime": "2",
@@ -1456,18 +1486,46 @@ class RaidCommands(commands.Cog):
             # Check rage requirements and cap status before joining
             god_db = db.get_prime_god(god["name"])
             rage_to_join = god_db.get("rage_to_join", 0) if god_db else 0
+
+            # ---- LIVE JOIN-RAGE CHECK (before joining) ----
+            # The join page (raid_url) states the exact join cost in the CURRENT MD
+            # state: "(It will take X of your Y rage to join this raid)". Read it live
+            # and use THAT as the join threshold instead of the (possibly empty/stale)
+            # stored rage_to_join — this is what fixes primes never having a rage
+            # threshold. Also persist it on the god so it's populated + visible.
+            try:
+                _join_page = await session.get_as(raid_url, former_suid)
+                _jc = _prc(_join_page)
+                if _jc.get("action") == "join" and _jc.get("cost"):
+                    rage_to_join = _jc["cost"]   # live value wins over stored
+                    try:
+                        if god.get("god_id"):
+                            db.update_prime_god(god["god_id"], {"rage_to_join": _jc["cost"]})
+                    except Exception:
+                        pass
+                    dbg(f"live join-rage cost for {god['name']}: {rage_to_join:,}")
+            except Exception as _e_jc:
+                dbg(f"join-rage read failed (using stored {rage_to_join:,}): {_e_jc}")
+
             capped_count  = 0
             low_rage_count = 0
 
-            # Filter out low rage before joining
-            joiners = []
-            for t in sorted_trustees:
-                if t.get("suid") == former_suid:
-                    continue
-                if rage_to_join and t.get("rage", 0) < rage_to_join:
-                    low_rage_count += 1
-                    continue
-                joiners.append(t)
+            # Rage-to-join check: every joiner must meet the (live) join cost. Per the
+            # design, low rage is a PERSISTENT pre-flight failure — we do NOT quietly
+            # drop under-rage accounts and launch under-strength; we bail so the
+            # primewatcher loop breaks this group and moves to the next. (t["rage"] is
+            # refreshed LIVE during the cap check, so this compares current rage.)
+            if rage_to_join:
+                _low = [t["name"] for t in sorted_trustees
+                        if t.get("suid") != former_suid and t.get("rage", 0) < rage_to_join]
+                if _low:
+                    dbg(f"Raid not formed — low rage to join (<{rage_to_join:,}): "
+                        f"{', '.join(_low)}")
+                    return False, 0, (f"Raid not formed — low rage to join "
+                                      f"(<{rage_to_join:,}): {', '.join(_low)}")
+
+            # All joiners meet the rage requirement.
+            joiners = [t for t in sorted_trustees if t.get("suid") != former_suid]
 
             # Join concurrently, then VERIFY who actually made it in before launching.
             # Prime raids have a hard minimum-to-launch and zero roster margin, so a

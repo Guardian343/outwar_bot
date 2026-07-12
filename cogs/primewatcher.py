@@ -755,8 +755,17 @@ class PrimeWatcher(commands.Cog):
                 await self._cast_for_group(gname, skills, channel)
 
                 while got < target and attempts < 10:
-                    _, capped_now, _ = await raid_cog._check_group_caps(trustees, 1)
+                    _avail_now, capped_now, _capwarn = await raid_cog._check_group_caps(trustees, 1)
                     if capped_now:
+                        # NOTE: capped_now is True if ANY member is capped. Log which,
+                        # so we can see whether the group broke because it's genuinely
+                        # unusable or because a single account tipped over.
+                        _capped_names = [t.get("name") for t in capped_now] if isinstance(capped_now, list) else capped_now
+                        logger.warning(
+                            "PRIMEWATCHER",
+                            f"{god_name}: {gname} caps check broke loop after {attempts} "
+                            f"attempt(s) — capped: {_capped_names}"
+                        )
                         break  # a member capped out -> fall back to next group
                     won, dmg, rnote = await raid_cog._do_god_raid(None, god, trustees)
 
@@ -798,12 +807,6 @@ class PrimeWatcher(commands.Cog):
                     st["groups"] = list(groups_used)
                     await _live_edit()   # throttled live tick (attempts + best HP)
                     # Pace attempts: firing prime raids back-to-back with no gap
-                    # saturates the shared connection budget and rate-limits the
-                    # joins (which then drop, since actions don't auto-retry). A
-                    # short settle between attempts lets the budget clear. Only
-                    # pause if we're going to loop again.
-                    if got < target and attempts < 10:
-                        await asyncio.sleep(3)
                     # saturates the shared connection budget and rate-limits the
                     # joins (which then drop, since actions don't auto-retry). A
                     # short settle between attempts lets the budget clear. Only
