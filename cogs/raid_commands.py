@@ -1603,6 +1603,29 @@ class RaidCommands(commands.Cog):
                 f"still missing: {len(missing)} · join-capped: {capped_count} "
                 f"(low-rage skipped: {low_rage_count})")
 
+            # ---- TEMP DIAGNOSTIC: does the bot's RAW fetch of the raid page contain
+            # a POPULATED raidmemberstable? (inspect-element shows post-JS DOM; the bot
+            # gets raw HTML. If the member rows are JS-loaded, the bot would see an
+            # empty table and a roster check would block every launch.) Remove once
+            # we've confirmed the table is server-rendered. ----
+            try:
+                _diag_html = await session.get_as(raid_url, former_suid)
+                import re as _re_diag
+                _tbody = _re_diag.search(
+                    r'<tbody[^>]*id=["\']raidmemberstable["\'][^>]*>(.*?)</tbody>',
+                    _diag_html or "", _re_diag.DOTALL | _re_diag.IGNORECASE
+                )
+                if _tbody:
+                    _ids = _re_diag.findall(r'profile\?id=(\d+)', _tbody.group(1))
+                    dbg(f"[ROSTER-DIAG] raidmemberstable FOUND · member suids in raw "
+                        f"fetch: {len(_ids)} → {_ids}")
+                else:
+                    dbg(f"[ROSTER-DIAG] raidmemberstable NOT found in raw fetch "
+                        f"(len={len(_diag_html or '')}) — likely JS-loaded; roster check "
+                        f"would need a different endpoint")
+            except Exception as _e_diag:
+                dbg(f"[ROSTER-DIAG] diagnostic fetch failed: {_e_diag}")
+
             # Verify-before-launch: if we couldn't get enough accounts in, DON'T launch
             # an under-strength raid (it would just read damage=0 and waste the attempt).
             if _confirmed < _min_to_launch:
