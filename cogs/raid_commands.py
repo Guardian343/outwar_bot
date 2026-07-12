@@ -1289,6 +1289,16 @@ class RaidCommands(commands.Cog):
                         is_capped = max_cap > 0 and avail <= 0
                         if cap_cache is not None:
                             cap_cache[name] = is_capped
+                        # Live rage is on this SAME home/toolbar page. Update the trustee
+                        # in-place so the downstream rage checks (pre-flight 1309 + join
+                        # filter 1457) use LIVE rage, not the stale value from the trustee
+                        # DB (which won't reflect rage drained by boss raids since the group
+                        # was last scraped). Caps are already live; this makes rage match.
+                        try:
+                            from outwar.scraper import parse_rage as _pr
+                            t["rage"] = _pr(html)
+                        except Exception:
+                            pass
                         return name, is_capped, avail, max_cap
                     except Exception:
                         return name, False, None, None
@@ -1773,6 +1783,8 @@ class RaidCommands(commands.Cog):
         from outwar.scraper import parse_god_cap
         semaphore = asyncio.Semaphore(8)
 
+        from outwar.scraper import parse_god_cap, parse_rage
+
         async def _fetch(t):
             suid = t.get("suid")
             if not suid:
@@ -1782,6 +1794,15 @@ class RaidCommands(commands.Cog):
                     html = await self.session.get_as("home", suid)
                 used, max_cap = parse_god_cap(html)
                 avail = (max_cap - used) if max_cap else 0
+                # Live rage is on the SAME toolbar/home page we just fetched for caps.
+                # Read it here and update the trustee in-place so downstream rage checks
+                # (pre-flight + join filter) use LIVE rage, not the stale value stored in
+                # the trustee DB (which doesn't reflect rage drained by boss raids since
+                # the group was last scraped). Caps are already live; this makes rage match.
+                try:
+                    t["rage"] = parse_rage(html)
+                except Exception:
+                    pass
                 return t["name"], avail, max_cap
             except Exception:
                 return t["name"], 0, 0
