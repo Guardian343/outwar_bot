@@ -759,18 +759,51 @@ class PrimeWatcher(commands.Cog):
                     if capped_now:
                         break  # a member capped out -> fall back to next group
                     won, dmg, rnote = await raid_cog._do_god_raid(None, god, trustees)
+
+                    # Two kinds of "not won" need different handling:
+                    #   PRE-FLIGHT failure (low rage / capped / not spawned) — the raid
+                    #     never formed; this is PERSISTENT (won't fix by retrying this
+                    #     group), so break the cycle for this group and move to the next.
+                    #   JOIN / under-strength / launched-but-lost — the raid DID form and
+                    #     the existing rate-limit rejoin already ran; this is TRANSIENT or
+                    #     a real raid, so keep the existing retry loop (count the attempt).
+                    _note_l = (rnote or "").lower()
+                    _preflight_fail = (
+                        "raid not formed" in _note_l      # low rage / capped pre-flight
+                        or "not spawned" in _note_l
+                        or "could not form" in _note_l
+                    )
+
+                    if _preflight_fail:
+                        logger.warning(
+                            "PRIMEWATCHER",
+                            f"{god_name}: pre-flight failed for {gname} — {rnote}; "
+                            f"not forming, moving to next group"
+                        )
+                        st["note"] = rnote
+                        break  # persistent — move to next group/prime
+
+                    # Otherwise the raid formed (launched-and-lost, or under-strength after
+                    # the rejoin). Count it as an attempt and keep the existing behaviour.
                     attempts += 1
                     if won:
                         got += 1
                     else:
-                        hp = self._hp_from_note(rnote)
-                        if hp is not None and (st["best_hp"] is None or hp < st["best_hp"]):
-                            st["best_hp"] = hp
+                        _hp = self._hp_from_note(rnote)
+                        if _hp is not None and (st["best_hp"] is None or _hp < st["best_hp"]):
+                            st["best_hp"] = _hp
+
                     st["got"] = got
                     st["attempts"] = attempts
                     st["groups"] = list(groups_used)
                     await _live_edit()   # throttled live tick (attempts + best HP)
                     # Pace attempts: firing prime raids back-to-back with no gap
+                    # saturates the shared connection budget and rate-limits the
+                    # joins (which then drop, since actions don't auto-retry). A
+                    # short settle between attempts lets the budget clear. Only
+                    # pause if we're going to loop again.
+                    if got < target and attempts < 10:
+                        await asyncio.sleep(3)
                     # saturates the shared connection budget and rate-limits the
                     # joins (which then drop, since actions don't auto-retry). A
                     # short settle between attempts lets the budget clear. Only
