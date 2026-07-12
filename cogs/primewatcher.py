@@ -732,6 +732,7 @@ class PrimeWatcher(commands.Cog):
                 continue
 
             gi = 0
+            _skip_prime = False   # set True on a RAGE failure → stop this prime for the cycle
             while got < target and attempts < 10 and gi < len(order):
                 grp = order[gi]
                 gname = grp["group"]
@@ -769,28 +770,42 @@ class PrimeWatcher(commands.Cog):
                         break  # a member capped out -> fall back to next group
                     won, dmg, rnote = await raid_cog._do_god_raid(None, god, trustees)
 
-                    # Two kinds of "not won" need different handling:
-                    #   PRE-FLIGHT failure (low rage / capped / not spawned) — the raid
-                    #     never formed; this is PERSISTENT (won't fix by retrying this
-                    #     group), so break the cycle for this group and move to the next.
-                    #   JOIN / under-strength / launched-but-lost — the raid DID form and
-                    #     the existing rate-limit rejoin already ran; this is TRANSIENT or
-                    #     a real raid, so keep the existing retry loop (count the attempt).
+                    # Categorise the "not won" outcome — three distinct behaviours:
+                    #   RAGE failure  → skip this PRIME entirely for the cycle. Rage
+                    #     regenerates, so by the next hourly cycle the accounts will
+                    #     have enough. Trying OTHER groups now is pointless (they'll
+                    #     hit the same wall) and wastes their attempts — so we stop the
+                    #     whole prime, not just this group.
+                    #   CAPS failure  → move to the NEXT group. This group's accounts
+                    #     are capped, but another group may still have caps.
+                    #   JOIN/under-strength/launched-lost → the raid formed; keep the
+                    #     existing retry loop (transient, or a real raid).
                     _note_l = (rnote or "").lower()
-                    _preflight_fail = (
-                        "raid not formed" in _note_l      # low rage / capped pre-flight
-                        or "not spawned" in _note_l
-                        or "could not form" in _note_l
+                    _rage_fail = "low rage" in _note_l or "form rage" in _note_l
+                    _caps_fail = (
+                        ("capped" in _note_l or "could not form" in _note_l
+                         or "not spawned" in _note_l)
+                        and not _rage_fail
                     )
 
-                    if _preflight_fail:
+                    if _rage_fail:
                         logger.warning(
                             "PRIMEWATCHER",
-                            f"{god_name}: pre-flight failed for {gname} — {rnote}; "
-                            f"not forming, moving to next group"
+                            f"{god_name}: RAGE too low for {gname} — {rnote}; "
+                            f"skipping this prime for the cycle (rage recovers next hour)"
                         )
                         st["note"] = rnote
-                        break  # persistent — move to next group/prime
+                        _skip_prime = True
+                        break  # break group loop; _skip_prime stops the prime below
+
+                    if _caps_fail:
+                        logger.warning(
+                            "PRIMEWATCHER",
+                            f"{god_name}: {gname} can't form (caps/spawn) — {rnote}; "
+                            f"trying next group"
+                        )
+                        st["note"] = rnote
+                        break  # move to next group — another may have caps
 
                     # Otherwise the raid formed (launched-and-lost, or under-strength after
                     # the rejoin). Count it as an attempt and keep the existing behaviour.
@@ -814,6 +829,11 @@ class PrimeWatcher(commands.Cog):
                     if got < target and attempts < 10:
                         await asyncio.sleep(3)
                 gi += 1
+                # On a RAGE failure, stop the whole prime for this cycle — don't try
+                # the remaining groups (they'd hit the same rage wall; rage recovers by
+                # next hourly cycle). Caps failures already just `gi += 1` to the next.
+                if _skip_prime:
+                    break
                 # Settle between groups too, so the next group's join burst doesn't
                 # start while the previous one's connections are still draining.
                 if got < target and gi < len(order):
@@ -825,6 +845,8 @@ class PrimeWatcher(commands.Cog):
             st["groups"] = list(groups_used)
             if got >= target:
                 st["state"] = "done_met"
+            elif _skip_prime:
+                st["state"] = "done_unmet"; st["note"] = st.get("note") or "low rage — retry next cycle"
             elif not groups_used:
                 st["state"] = "capped"
             elif attempts >= 10:

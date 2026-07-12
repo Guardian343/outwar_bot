@@ -224,6 +224,104 @@ class AdminCommands(commands.Cog):
         await ctx.send(embed=embed)
 
     # ------------------------------------------------------------------
+    # !remove-trustees  /  !clear-trustees   (destructive — need confirm)
+    # ------------------------------------------------------------------
+
+    @commands.command(name="remove-trustees")
+    async def remove_trustees(self, ctx, *, crew_name: str = None):
+        """
+        Remove trustees the bot has assigned. Usage:
+          !remove-trustees <crew>   → remove all trustees in that crew
+          !remove-trustees          → (no crew) shows how to clear ALL
+        Destructive: asks for confirmation before saving.
+        """
+        if not crew_name:
+            await ctx.send(
+                "Specify a crew to remove its trustees: `!remove-trustees <crew>`.\n"
+                "To wipe **every** trustee, use `!clear-trustees`."
+            )
+            return
+
+        all_trustees = db.get_trustees()
+        if not all_trustees:
+            await ctx.send("There are no trustees assigned to the bot.")
+            return
+
+        # Resolve the crew (accept short name or full name), same as autorank does.
+        crew_full = db.normalize_crew(crew_name)
+        crew = db.get_crew(crew_name)
+        if crew:
+            crew_full = crew["full_name"]
+
+        to_remove = [t for t in all_trustees if t.get("crew") == crew_full]
+        if not to_remove:
+            await ctx.send(
+                f"No trustees found in crew **{crew_full}**. "
+                f"(Names are matched on the stored `crew` field — check `!scan-trustees` output.)"
+            )
+            return
+
+        # Confirmation — destructive.
+        await ctx.send(
+            f"⚠️ This will remove **{len(to_remove)}** trustee(s) from crew "
+            f"**{crew_full}**, leaving **{len(all_trustees) - len(to_remove)}**.\n"
+            f"Reply **yes** within 30s to confirm."
+        )
+
+        def _check(m):
+            return m.author == ctx.author and m.channel == ctx.channel and \
+                m.content.strip().lower() in ("yes", "y", "no", "n")
+
+        try:
+            reply = await self.bot.wait_for("message", check=_check, timeout=30.0)
+        except Exception:
+            await ctx.send("Timed out — no trustees removed.")
+            return
+        if reply.content.strip().lower() in ("no", "n"):
+            await ctx.send("Cancelled — no trustees removed.")
+            return
+
+        remaining = [t for t in all_trustees if t.get("crew") != crew_full]
+        db.save_trustees(remaining)
+        await ctx.send(
+            f"✅ Removed **{len(to_remove)}** trustee(s) from **{crew_full}**. "
+            f"**{len(remaining)}** trustee(s) remain."
+        )
+
+    @commands.command(name="clear-trustees")
+    async def clear_trustees(self, ctx):
+        """Remove ALL trustees assigned to the bot. Destructive — asks to confirm."""
+        all_trustees = db.get_trustees()
+        if not all_trustees:
+            await ctx.send("There are no trustees assigned to the bot.")
+            return
+
+        await ctx.send(
+            f"⚠️ This will remove **ALL {len(all_trustees)}** trustee(s) — the bot will "
+            f"have no accounts assigned until you `!scan-trustees` again.\n"
+            f"Reply **yes** within 30s to confirm."
+        )
+
+        def _check(m):
+            return m.author == ctx.author and m.channel == ctx.channel and \
+                m.content.strip().lower() in ("yes", "y", "no", "n")
+
+        try:
+            reply = await self.bot.wait_for("message", check=_check, timeout=30.0)
+        except Exception:
+            await ctx.send("Timed out — no trustees removed.")
+            return
+        if reply.content.strip().lower() in ("no", "n"):
+            await ctx.send("Cancelled — no trustees removed.")
+            return
+
+        db.save_trustees([])
+        await ctx.send(
+            f"✅ Cleared all **{len(all_trustees)}** trustee(s). "
+            f"Run `!scan-trustees` to reassign."
+        )
+
+    # ------------------------------------------------------------------
     # !autorank
     # ------------------------------------------------------------------
 

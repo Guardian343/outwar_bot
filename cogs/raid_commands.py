@@ -1317,35 +1317,33 @@ class RaidCommands(commands.Cog):
             # 2) RAGE CHECK (strict, BEFORE forming): every account must be able to
             # afford its rage cost, or we bail WITHOUT forming. This runs before any
             # navigation/forming so a low-rage group never creates a raid it can't
-            # complete. We use the god's STORED costs (populated from the live form/
-            # join pages on prior raids):
-            #   - rage_to_form: what the FORMER needs (higher cost)
-            #   - rage_to_join: what every JOINER needs
+            # complete.
+            #
+            # Threshold selection (self-improving):
+            #   - If rage_to_join is KNOWN (learned from a prior successful raid), use it
+            #     — it's the accurate, efficient value. Matters more on higher-end primes
+            #     where the form/join gap is larger, and keeps this correct if the logic
+            #     is later ported to boss raids (where the gap can be bigger still).
+            #   - Otherwise fall back to rage_to_form (always stored) as a SAFE
+            #     conservative threshold: form cost > join cost, so anyone who clears it
+            #     can definitely join. Slightly over-strict, but never orphans.
             # t["rage"] was refreshed LIVE during the cap check above, so this compares
-            # current rage. If costs aren't known yet (first ever raid on this god),
-            # the live per-page checks later will still catch it — but once populated,
-            # this gate stops the form entirely.
+            # current rage.
             god_db = db.get_prime_god(god["name"])
-            rage_to_join = god_db.get("rage_to_join", 0) if god_db else 0
             rage_to_form = god_db.get("rage_to_form", 0) if god_db else 0
+            rage_to_join_known = god_db.get("rage_to_join", 0) if god_db else 0
+            rage_threshold = rage_to_join_known or rage_to_form
+            _threshold_kind = "join" if rage_to_join_known else "form"
 
-            # Joiners need join-rage; at least one account must be able to afford the
-            # (higher) form cost to act as former. Prime raids need the FULL roster, so
-            # if ANY account can't afford to join, the group can't field the raid → bail.
-            if rage_to_join:
-                low_join = [t["name"] for t in sorted_trustees
-                            if t.get("rage", 0) < rage_to_join]
-                if low_join:
-                    return False, 0, (f"Raid not formed — low rage to join "
-                                      f"(<{rage_to_join:,}): {', '.join(low_join)}")
-            if rage_to_form:
-                # Need at least one account with enough rage to FORM.
-                can_form = [t for t in sorted_trustees if t.get("rage", 0) >= rage_to_form]
-                if not can_form:
-                    _top = max((t.get("rage", 0) for t in sorted_trustees), default=0)
-                    return False, 0, (f"Raid not formed — no account has form rage "
-                                      f"(needs {rage_to_form:,}, best has {_top:,})")
-            dbg("pre-flight passed: all accounts have caps + rage")
+            if rage_threshold:
+                low_rage = [t["name"] for t in sorted_trustees
+                            if t.get("rage", 0) < rage_threshold]
+                if low_rage:
+                    _short = ", ".join(low_rage[:6]) + ("…" if len(low_rage) > 6 else "")
+                    return False, 0, (f"Raid not formed — low rage "
+                                      f"(<{rage_threshold:,} {_threshold_kind}): {_short}")
+            dbg(f"pre-flight passed: all accounts have caps + rage "
+                f"(threshold={rage_threshold:,} [{_threshold_kind}])")
             pre_capped_count = 0
 
             # Navigate all characters to the god's room and capture the form URL
@@ -1510,49 +1508,34 @@ class RaidCommands(commands.Cog):
             if not raid_url:
                 return False, 0, "Could not find forming raid."
 
-            # Check rage requirements and cap status before joining
-            god_db = db.get_prime_god(god["name"])
-            rage_to_join = god_db.get("rage_to_join", 0) if god_db else 0
-
-            # ---- LIVE JOIN-RAGE CHECK (before joining) ----
-            # The join page (raid_url) states the exact join cost in the CURRENT MD
-            # state: "(It will take X of your Y rage to join this raid)". Read it live
-            # and use THAT as the join threshold instead of the (possibly empty/stale)
-            # stored rage_to_join — this is what fixes primes never having a rage
-            # threshold. Also persist it on the god so it's populated + visible.
-            try:
-                _join_page = await session.get_as(raid_url, former_suid)
-                _jc = _prc(_join_page)
-                if _jc.get("action") == "join" and _jc.get("cost"):
-                    rage_to_join = _jc["cost"]   # live value wins over stored
-                    try:
-                        if god.get("god_id"):
-                            db.update_prime_god(god["god_id"], {"rage_to_join": _jc["cost"]})
-                    except Exception:
-                        pass
-                    dbg(f"live join-rage cost for {god['name']}: {rage_to_join:,}")
-            except Exception as _e_jc:
-                dbg(f"join-rage read failed (using stored {rage_to_join:,}): {_e_jc}")
-
             capped_count  = 0
             low_rage_count = 0
 
-            # Rage-to-join check: every joiner must meet the (live) join cost. Per the
-            # design, low rage is a PERSISTENT pre-flight failure — we do NOT quietly
-            # drop under-rage accounts and launch under-strength; we bail so the
-            # primewatcher loop breaks this group and moves to the next. (t["rage"] is
-            # refreshed LIVE during the cap check, so this compares current rage.)
-            if rage_to_join:
-                _low = [t["name"] for t in sorted_trustees
-                        if t.get("suid") != former_suid and t.get("rage", 0) < rage_to_join]
-                if _low:
-                    dbg(f"Raid not formed — low rage to join (<{rage_to_join:,}): "
-                        f"{', '.join(_low)}")
-                    return False, 0, (f"Raid not formed — low rage to join "
-                                      f"(<{rage_to_join:,}): {', '.join(_low)}")
-
-            # All joiners meet the rage requirement.
+            # (Rage was already checked BEFORE forming — using the learned join cost if
+            # known, else the conservative form cost. No second rage filter needed here.)
             joiners = [t for t in sorted_trustees if t.get("suid") != former_suid]
+
+            # LEARN the real join cost (once). If we don't yet have rage_to_join stored,
+            # read it from a JOINER's view of the join page — a not-yet-joined account
+            # sees "It will take X of your Y rage to join this raid" (the former, already
+            # in the raid, does not, which is why earlier attempts to store it failed).
+            # We only CAPTURE it here; we store it after the raid SUCCEEDS (so we know
+            # the value came from a genuinely working join, not a misread). This makes
+            # future raids on this god use the accurate, efficient join threshold.
+            _captured_join_cost = 0
+            if not rage_to_join_known:
+                try:
+                    _probe = next((t for t in joiners if t.get("suid")), None)
+                    if _probe:
+                        _jp = await session.get_as(raid_url, _probe["suid"])
+                        _jc = _prc(_jp)
+                        if _jc.get("action") == "join" and _jc.get("cost"):
+                            _captured_join_cost = _jc["cost"]
+                            dbg(f"captured join cost for {god['name']}: "
+                                f"{_captured_join_cost:,} (probed as {_probe['name']}) "
+                                f"— will store if raid succeeds")
+                except Exception as _e_cap:
+                    dbg(f"join-cost capture failed (non-fatal): {_e_cap}")
 
             # Join concurrently, then VERIFY who actually made it in before launching.
             # Prime raids have a hard minimum-to-launch and zero roster margin, so a
@@ -1645,6 +1628,18 @@ class RaidCommands(commands.Cog):
                         "could not join",
                         "unable to join",
                         "not enough rage",
+                        # Real Outwar rage-failure text (confirmed from the game):
+                        #   "You must have 650 rage to form a raid" / to join.
+                        # And if the response STILL shows the join/form prompt
+                        # ("It will take X of your Y rage"), the join did NOT go through
+                        # — the account is being re-shown the prompt, i.e. not in the
+                        # raid. Both mean NOT JOINED. This is what catches the phantom
+                        # joins the old negative check missed (join looked fine, no known
+                        # error, but the account wasn't actually in → damage=0 → orphan).
+                        "you must have",
+                        "rage to form",
+                        "rage to join",
+                        "it will take",
                     )
 
                     failure_marker = next(
@@ -1655,7 +1650,8 @@ class RaidCommands(commands.Cog):
                     if failure_marker:
                         logger.warning(
                             "RAID",
-                            f"Prime join rejected for {name}: {failure_marker}"
+                            f"Prime join NOT confirmed for {name}: '{failure_marker}' "
+                            f"present (rage/prompt still shown → not in raid)"
                         )
                         return (False, False)
 
@@ -1769,6 +1765,21 @@ class RaidCommands(commands.Cog):
 
                 asyncio.create_task(_record_win_stats())
 
+                # Learn-once: the raid genuinely succeeded, so the join cost we captured
+                # from a joiner's join-page view is trustworthy. Store it now (only if we
+                # captured one this raid and don't already have it), so subsequent raids
+                # on this god use the accurate join threshold instead of the conservative
+                # form-cost fallback. This is the "store join_cost on a successful raid"
+                # step — keyed on success so we never persist a value from a misread or a
+                # failed join.
+                if _captured_join_cost and not rage_to_join_known and god.get("god_id"):
+                    try:
+                        db.update_prime_god(god["god_id"], {"rage_to_join": _captured_join_cost})
+                        dbg(f"stored rage_to_join={_captured_join_cost:,} for {god['name']} "
+                            f"(learned from this successful raid)")
+                    except Exception as _e_st:
+                        dbg(f"failed to store rage_to_join (non-fatal): {_e_st}")
+
             # If won, mark all participants as potentially capped in cache
             # (they gained a cap, may now be at max — will be re-checked next attempt)
             if won and cap_cache is not None:
@@ -1812,7 +1823,7 @@ class RaidCommands(commands.Cog):
             if pre_capped_count:
                 notes.append(f"{pre_capped_count} skipped (capped)")
             if low_rage_count:
-                notes.append(f"{low_rage_count} skipped (low rage < {rage_to_join:,})")
+                notes.append(f"{low_rage_count} skipped (low rage < {rage_to_form:,})")
             if capped_count:
                 notes.append(f"{capped_count} blocked on join (capped)")
             if not won:

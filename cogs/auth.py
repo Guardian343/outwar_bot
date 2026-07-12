@@ -38,7 +38,7 @@ OWNER_COMMANDS = {
     "set-alert-channel", "alerting",
     "summary-set", "summary-remove", "summary-list", "summary-now",
     "focusdrops", "unfocusdrops", "focuslist",
-    "scan-trustees", "update-trustees",
+    "scan-trustees", "update-trustees", "remove-trustees", "clear-trustees",
     "autorank", "optimise", "optimise-all", "optimize-all", "optimiseall",
     "standings", "rankings",
     "scan-keys", "scankeys", "scan-teleporters",
