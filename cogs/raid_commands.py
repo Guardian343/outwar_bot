@@ -1314,14 +1314,37 @@ class RaidCommands(commands.Cog):
             if capped_names:
                 return False, 0, f"Raid not formed — capped: {', '.join(capped_names)}"
 
-            # 2) RAGE CHECK (strict): every account must meet the god's rage-to-join, or bail.
+            # 2) RAGE CHECK (strict, BEFORE forming): every account must be able to
+            # afford its rage cost, or we bail WITHOUT forming. This runs before any
+            # navigation/forming so a low-rage group never creates a raid it can't
+            # complete. We use the god's STORED costs (populated from the live form/
+            # join pages on prior raids):
+            #   - rage_to_form: what the FORMER needs (higher cost)
+            #   - rage_to_join: what every JOINER needs
+            # t["rage"] was refreshed LIVE during the cap check above, so this compares
+            # current rage. If costs aren't known yet (first ever raid on this god),
+            # the live per-page checks later will still catch it — but once populated,
+            # this gate stops the form entirely.
             god_db = db.get_prime_god(god["name"])
             rage_to_join = god_db.get("rage_to_join", 0) if god_db else 0
+            rage_to_form = god_db.get("rage_to_form", 0) if god_db else 0
+
+            # Joiners need join-rage; at least one account must be able to afford the
+            # (higher) form cost to act as former. Prime raids need the FULL roster, so
+            # if ANY account can't afford to join, the group can't field the raid → bail.
             if rage_to_join:
-                low_rage = [t["name"] for t in sorted_trustees if t.get("rage", 0) < rage_to_join]
-                if low_rage:
-                    return False, 0, (f"Raid not formed — low rage (<{rage_to_join:,}): "
-                                      f"{', '.join(low_rage)}")
+                low_join = [t["name"] for t in sorted_trustees
+                            if t.get("rage", 0) < rage_to_join]
+                if low_join:
+                    return False, 0, (f"Raid not formed — low rage to join "
+                                      f"(<{rage_to_join:,}): {', '.join(low_join)}")
+            if rage_to_form:
+                # Need at least one account with enough rage to FORM.
+                can_form = [t for t in sorted_trustees if t.get("rage", 0) >= rage_to_form]
+                if not can_form:
+                    _top = max((t.get("rage", 0) for t in sorted_trustees), default=0)
+                    return False, 0, (f"Raid not formed — no account has form rage "
+                                      f"(needs {rage_to_form:,}, best has {_top:,})")
             dbg("pre-flight passed: all accounts have caps + rage")
             pre_capped_count = 0
 
@@ -1411,9 +1434,13 @@ class RaidCommands(commands.Cog):
                         return False, 0, "not spawned"
 
                 if not form_url:
-                    # Reached the god but couldn't form -> spawned but capped/full.
+                    # Reached the god but couldn't get a form URL. Rage was already
+                    # checked before forming, so this is most likely genuinely capped
+                    # or the raid is full/unavailable — but we don't ASSERT caps (that
+                    # was previously a guess that mislabeled low-rage failures as
+                    # "capped"). Report could-not-form without claiming a false cause.
                     if god_seen:
-                        return False, 0, "capped — could not form"
+                        return False, 0, "could not form (spawned — likely capped or full)"
                     dbg("form: no account could form (none reached room / canForm false)")
                     return False, 0, "not spawned"
                 dbg(f"form: former={former['name'] if former else '?'} form_url={'yes' if form_url else 'no'}")
@@ -1670,29 +1697,6 @@ class RaidCommands(commands.Cog):
             dbg(f"joiners attempted: {len(joiners)} · confirmed in: {_confirmed} · "
                 f"still missing: {len(missing)} · join-capped: {capped_count} "
                 f"(low-rage skipped: {low_rage_count})")
-
-            # ---- TEMP DIAGNOSTIC: does the bot's RAW fetch of the raid page contain
-            # a POPULATED raidmemberstable? (inspect-element shows post-JS DOM; the bot
-            # gets raw HTML. If the member rows are JS-loaded, the bot would see an
-            # empty table and a roster check would block every launch.) Remove once
-            # we've confirmed the table is server-rendered. ----
-            try:
-                _diag_html = await session.get_as(raid_url, former_suid)
-                import re as _re_diag
-                _tbody = _re_diag.search(
-                    r'<tbody[^>]*id=["\']raidmemberstable["\'][^>]*>(.*?)</tbody>',
-                    _diag_html or "", _re_diag.DOTALL | _re_diag.IGNORECASE
-                )
-                if _tbody:
-                    _ids = _re_diag.findall(r'profile\?id=(\d+)', _tbody.group(1))
-                    dbg(f"[ROSTER-DIAG] raidmemberstable FOUND · member suids in raw "
-                        f"fetch: {len(_ids)} → {_ids}")
-                else:
-                    dbg(f"[ROSTER-DIAG] raidmemberstable NOT found in raw fetch "
-                        f"(len={len(_diag_html or '')}) — likely JS-loaded; roster check "
-                        f"would need a different endpoint")
-            except Exception as _e_diag:
-                dbg(f"[ROSTER-DIAG] diagnostic fetch failed: {_e_diag}")
 
             # Verify-before-launch: if we couldn't get enough accounts in, DON'T launch
             # an under-strength raid (it would just read damage=0 and waste the attempt).
