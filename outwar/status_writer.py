@@ -177,3 +177,28 @@ def publish_guilds(guilds):
         _update("guilds", payload)
     except Exception:
         pass
+
+
+def publish_access(owner, admins, members):
+    """
+    Publish the dashboard-visible auth list with RESOLVED DISCORD NAMES so the
+    dashboard shows who people are, not bare IDs.
+
+    Each argument is a list of dicts: {"id": int, "name": str}. The caller (the
+    auth cog) resolves names via bot.get_user() before calling this — the
+    supervisor can't resolve Discord names itself since it only reads files.
+    'owner' is a single-item list (or empty).
+    """
+    try:
+        def clean(lst):
+            out = []
+            for u in (lst or []):
+                out.append({"id": u.get("id"), "name": u.get("name") or str(u.get("id"))})
+            return out
+        _update("access", {
+            "owner": clean(owner),
+            "admins": clean(admins),
+            "members": clean(members),
+        })
+    except Exception:
+        pass
