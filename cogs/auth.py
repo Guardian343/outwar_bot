@@ -133,6 +133,37 @@ class AuthCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    def publish_access_list(self):
+        """
+        Publish the auth list WITH resolved Discord names to status.json, so the
+        dashboard shows who each person is instead of a bare ID. Uses the same
+        bot.get_user() resolution as !auth-list. Safe: never raises into callers.
+        """
+        try:
+            from outwar import status_writer
+
+            def resolve(uid):
+                u = self.bot.get_user(uid)
+                # Prefer a human-friendly name; fall back to the ID as a string.
+                name = None
+                if u is not None:
+                    name = getattr(u, "global_name", None) or getattr(u, "name", None)
+                return {"id": uid, "name": name or str(uid)}
+
+            auth = db.get_auth()
+            owner = [resolve(OWNER_ID)]
+            # Don't list the owner again under admins/members if their ID is there.
+            admins = [resolve(uid) for uid in auth.get("admins", []) if uid != OWNER_ID]
+            members = [resolve(uid) for uid in auth.get("members", []) if uid != OWNER_ID]
+            status_writer.publish_access(owner, admins, members)
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        # Publish the resolved auth list once the bot's user cache is populated.
+        self.publish_access_list()
+
     @commands.command(name="restart")
     async def restart(self, ctx):
         """Restart the bot process. Owner only."""
@@ -164,6 +195,7 @@ class AuthCommands(commands.Cog):
 
         db.remove_auth(member.id)
         db.add_auth(level, member.id)
+        self.publish_access_list()  # keep the dashboard in sync
         await ctx.send(
             f"✅ **{member.display_name}** is now **{level}**"
             f"{' — can run raids, casting and all actions.' if level == 'admin' else ' — can view stats and status.'}"
@@ -202,6 +234,7 @@ class AuthCommands(commands.Cog):
         removed = db.remove_auth(member.id)
         if removed:
             await ctx.send(f"✅ **{member.display_name}** removed from **{removed}**.")
+            self.publish_access_list()  # keep the dashboard in sync
         else:
             await ctx.send(f"**{member.display_name}** had no access level set.")
 
