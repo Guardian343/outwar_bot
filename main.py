@@ -45,6 +45,12 @@ async def main():
     try:
         await session.login(config["username"], config["password"])
         logger.info("SESSION", f"Outwar login successful — username: {config['username']}, user_id: {session.user_id}")
+        # Publish the bot account so the dashboard shows whose trustees the totals reflect.
+        try:
+            from outwar import status_writer
+            status_writer.publish_account(config["username"], session.user_id)
+        except Exception:
+            pass
     except LoginError as e:
         logger.error("SESSION", f"Outwar login failed: {e}")
         return

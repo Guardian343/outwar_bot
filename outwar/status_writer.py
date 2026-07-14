@@ -145,3 +145,15 @@ def publish_primewatch(summary):
         _update("primewatch", summary)
     except Exception:
         pass
+
+
+def publish_account(username, user_id):
+    """
+    Publish which Outwar account the bot is logged in as. The dashboard shows this
+    under the instance so it's clear WHOSE trustees the total reflects (the count
+    is everything trusteed to this account, across all crews).
+    """
+    try:
+        _update("account", {"username": username, "user_id": user_id})
+    except Exception:
+        pass
