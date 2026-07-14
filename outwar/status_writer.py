@@ -157,3 +157,23 @@ def publish_account(username, user_id):
         _update("account", {"username": username, "user_id": user_id})
     except Exception:
         pass
+
+
+def publish_guilds(guilds):
+    """
+    guilds: iterable of discord.Guild. Publishes the Discord server(s) this bot
+    instance is in (name + id + member count) so the dashboard can label the
+    instance with the real server rather than a generic name. In your model each
+    bot serves one server, so this is normally a single entry.
+    """
+    try:
+        payload = []
+        for g in guilds:
+            payload.append({
+                "id": getattr(g, "id", None),
+                "name": getattr(g, "name", "") or "",
+                "members": getattr(g, "member_count", None),
+            })
+        _update("guilds", payload)
+    except Exception:
+        pass

@@ -105,6 +105,13 @@ async def main():
     @bot.event
     async def on_ready():
         logger.info("MAIN", f"Bot ready as {bot.user}")
+        # Publish the Discord server(s) this bot is in, so the dashboard can label
+        # the instance with the real server name.
+        try:
+            from outwar import status_writer
+            status_writer.publish_guilds(bot.guilds)
+        except Exception:
+            pass
         channel = bot.get_channel(config["channel"])
         if channel:
             await channel.send("DeathBot is online")
