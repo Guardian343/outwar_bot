@@ -179,6 +179,24 @@ def publish_guilds(guilds):
         pass
 
 
+def publish_settings_meta(channels, envoy_pool_last):
+    """
+    Publish human-friendly settings context for the dashboard (read-only):
+      - channels: dict of {alert_type: {"id": str, "name": str}} with the Discord
+        channel NAME resolved by the caller (the supervisor only reads files, so
+        it can't resolve names itself).
+      - envoy_pool_last: the last completed envoy loot pool number (the "next"
+        pool is this + 1; the dashboard shows both to avoid confusion).
+    """
+    try:
+        _update("settings_meta", {
+            "channels": channels or {},
+            "envoy_pool_last": envoy_pool_last,
+        })
+    except Exception:
+        pass
+
+
 def publish_access(owner, admins, members):
     """
     Publish the dashboard-visible auth list with RESOLVED DISCORD NAMES so the

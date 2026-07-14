@@ -172,6 +172,29 @@ class AuthCommands(commands.Cog):
     async def on_ready(self):
         # Publish the resolved auth list once the bot is connected.
         await self.publish_access_list()
+        # Publish resolved alert-channel names + envoy pool context for the dashboard.
+        self.publish_settings_meta()
+
+    def publish_settings_meta(self):
+        """
+        Publish human-friendly settings context: alert-channel NAMES (resolved from
+        their IDs) and the last envoy loot pool. Read-only for the dashboard.
+        """
+        try:
+            from outwar import status_writer
+            settings = db.get_settings()
+            channels = {}
+            for atype in ("gods", "bosses", "envoys", "drops", "summary", "log"):
+                cid = settings.get(f"alert_channel_{atype}")
+                if cid is None:
+                    continue
+                ch = self.bot.get_channel(int(cid)) if str(cid).isdigit() else None
+                name = getattr(ch, "name", None)
+                channels[atype] = {"id": str(cid), "name": ("#" + name) if name else str(cid)}
+            envoy_last = settings.get("envoy_loot_pool")
+            status_writer.publish_settings_meta(channels, envoy_last)
+        except Exception:
+            pass
 
     @commands.command(name="restart")
     async def restart(self, ctx):
