@@ -1,3 +1,14 @@
+import sys
+# Force UTF-8 output before anything else runs. Under pythonw/the supervisor on
+# Windows, the default pipe encoding is cp1252 and can't encode characters like
+# "→" used in debug logs — which crashed raids with a 'charmap' codec error.
+# Setting UTF-8 here (first thing) makes all output robust.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 import asyncio
 import os
 import discord

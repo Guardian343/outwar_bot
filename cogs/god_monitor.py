@@ -12,6 +12,7 @@ import discord
 from discord.ext import commands, tasks
 from datetime import datetime, timezone
 from outwar import database as db
+from outwar import status_writer  # publishes live state to status.json for the dashboard
 from outwar.scraper import (
     parse_gods, parse_envoys, parse_bosses,
     parse_god_stats_page, parse_prime_god_page,
@@ -296,6 +297,7 @@ class GodMonitor(commands.Cog):
             envoys = parse_envoys(html)
             self._gods_cache = gods
             self._envoys_cache = envoys
+            status_writer.publish_gods(gods)  # dashboard: live god roster + HP
             await self._process_god_changes(gods)
             await self._process_envoy_changes(envoys)
         except Exception as e:
@@ -305,6 +307,7 @@ class GodMonitor(commands.Cog):
         try:
             html = await self.session.get("crew_bossspawns")
             bosses = parse_bosses(html)
+            status_writer.publish_bosses(bosses)  # dashboard: live boss roster + HP
             await self._process_boss_changes(bosses)
         except Exception as e:
             logger.warning("GOD_MONITOR", f"Boss monitor poll error: {e}")
