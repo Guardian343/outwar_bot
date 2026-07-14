@@ -193,7 +193,11 @@ def publish_access(owner, admins, members):
         def clean(lst):
             out = []
             for u in (lst or []):
-                out.append({"id": u.get("id"), "name": u.get("name") or str(u.get("id"))})
+                # Force id to string — Discord IDs exceed JS safe-integer range and
+                # would be corrupted if the browser parsed them as numbers.
+                uid = u.get("id")
+                out.append({"id": str(uid) if uid is not None else None,
+                            "name": u.get("name") or str(uid)})
             return out
         _update("access", {
             "owner": clean(owner),
