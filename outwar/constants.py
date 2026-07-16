@@ -337,11 +337,79 @@ POTIONS = {
     "sresist":    "Shadow Resistance",
     "kresist":    "Kinetic Resistance",
     "wonderland": "Wonderland Potion",
+    # --- Zombie potions ---
+    "zombie1":    "Zombie Potion 1",
+    "zombie2":    "Zombie Potion 2",
+    "zombie3":    "Zombie Potion 3",
+    "zombie4":    "Zombie Potion 4",
+    "zombie5":    "Zombie Potion 5",
+    "zombie6":    "Zombie Potion 6",
+    # --- Pot pack ---
+    "alsayic":    "Potion of Enraged Alsayic",
+    "dose":       "Dose of Destruction",
+    "mushroom":   "Funny Little Mushroom",
+    "pumpkin":    "Pumpkin Juice",
+    "sammy":      "Sammy Sosa's Special Sauce",
+    "holy":       "Bottle of Holy Slaughter",
+    "burning":    "Flask of Burning Souls",
+    "lightning":  "Flask of Conjured Lightning",
+    "flaming":    "Flask of Flaming Death",
+    "forbidden":  "Flask of Forbidden Knowledge",
+    "supernova":  "Flask of Super Nova",
+    "juicebox":   "Olympian Juicebox",
+    "push":       "Olympian Push",
+    # --- High end ---
+    "insanity":   "Vial of Insanity",
+    "demonic":    "Demonic Madness",
+    "tincture":   "Triworld Tincture",
+    "seething":   "Seething Echoes",
     # Aliases
     "rem":        "Remnant Solice",
     "eleresm":    "Potion of Elemental Resistance",
     "wonder":     "Wonderland Potion",
     "wl":         "Wonderland Potion",
+}
+
+# ---------------------------------------------------------------------------
+# Named potion groups — so you can cast a whole set by one name instead of
+# listing pots individually (e.g. in primewatcher groups, or !drink).
+#
+# IMPORTANT: potions are matched by their EXACT in-game name (see POTIONS above)
+# against the backpack. If a name here doesn't match the item exactly, that pot
+# is silently reported as "not in backpack" rather than erroring — so if a pot
+# never seems to cast, check its name string first.
+# ---------------------------------------------------------------------------
+POT_GROUPS = {
+    # The freebies — always available, cheap to keep up.
+    "free": ["rems", "resist", "squid", "amdir", "kix"],
+    # Zombie potion series.
+    "zombies": ["zombie1", "zombie2", "zombie3", "zombie4", "zombie5", "zombie6"],
+    # The standard purchasable pot pack.
+    "potpack": [
+        "alsayic", "dose", "mushroom", "pumpkin", "sammy", "holy",
+        "burning", "lightning", "flaming", "forbidden", "supernova",
+        "juicebox", "push",
+    ],
+    # The expensive/rare top-tier pots.
+    "highend": ["insanity", "demonic", "tincture", "seething"],
+    # Chaos philters.
+    "chaos": ["minor", "major"],
+}
+
+# "all" = every potion group combined, de-duplicated, order preserved.
+POT_GROUPS["all"] = list(dict.fromkeys(
+    POT_GROUPS["free"] + POT_GROUPS["chaos"] + POT_GROUPS["zombies"]
+    + POT_GROUPS["potpack"] + POT_GROUPS["highend"]
+))
+
+# Friendly labels for display in Discord / the dashboard.
+POT_GROUP_LABELS = {
+    "free":    "Free Pots",
+    "zombies": "Zombies",
+    "potpack": "Pot Pack",
+    "highend": "High End",
+    "chaos":   "Chaos Pots",
+    "all":     "All Pots",
 }
 
 # Boss-specific pot lists

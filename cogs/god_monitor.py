@@ -420,8 +420,16 @@ class GodMonitor(commands.Cog):
             new_state[boss.full_name] = boss.spawned
             was_spawned = self._last_bosses.get(boss.full_name)
 
-            # Check window entry (only for non-spawned bosses with timing data)
-            if not boss.spawned and boss.spawn_days and (boss.last_killed or db.get_boss_death_dt(boss.full_name)):
+            # Did it die on THIS poll? Work that out before the window check,
+            # because a just-died boss's stored death time is about to change —
+            # checking the window against the stale (previous) death time would
+            # wrongly report "entered its window" at the same moment it died.
+            died_now = (was_spawned is True) and (not boss.spawned)
+
+            # Check window entry (only for non-spawned bosses with timing data,
+            # and never for one that just died — see above).
+            if (not died_now and not boss.spawned and boss.spawn_days
+                    and (boss.last_killed or db.get_boss_death_dt(boss.full_name))):
                 try:
                     import re as _re3
                     # Prefer our own precise UTC death record; fall back to parsing
@@ -458,6 +466,9 @@ class GodMonitor(commands.Cog):
                 just_spawned.append(boss)
             elif was_spawned and not boss.spawned:
                 just_died.append(boss)
+                # The window restarts from this death, so clear the window flag —
+                # otherwise the next genuine window entry (False->True) wouldn't fire.
+                self._boss_window_state[boss.full_name] = False
                 # Record the precise UTC moment we observed the despawn. This is the
                 # authoritative, timezone-unambiguous reference for the spawn window —
                 # far more reliable than parsing the page's CST-assumed kill string.

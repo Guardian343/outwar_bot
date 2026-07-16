@@ -521,12 +521,22 @@ class PrimeWatcher(commands.Cog):
                 from cogs.character_commands import CLASS_SKILLS
                 await char_cog._cast_skill_group(_Shim(channel), group_name, CLASS_SKILLS, "Class")
             elif skills == "raid":
+                from outwar.constants import CLASS_SKILLS, Skill
                 from cogs.boss_raid_commands import (
-                    BOSS_SKILLS_CLASS, BOSS_SKILLS_PRES, BOSS_SKILLS_MISC, ROTATING_SKILLS
+                    BOSS_SKILLS_PRES, BOSS_SKILLS_MISC, ROTATING_SKILLS
                 )
-                raid_skills = (BOSS_SKILLS_CLASS
-                               + [s for s in BOSS_SKILLS_PRES if s not in ROTATING_SKILLS]
-                               + BOSS_SKILLS_MISC)
+                # Raid tier = the FULL class skill set + the raid skills, combined.
+                # MD (Markdown) is deliberately excluded: it's a boss-raid mechanic
+                # and isn't wanted on prime groups. Rotating skills (cast per-account
+                # elsewhere) are excluded too.
+                exclude = set(ROTATING_SKILLS) | {Skill.MARKDOWN}
+                raid_skills = (
+                    list(CLASS_SKILLS)
+                    + [s for s in BOSS_SKILLS_PRES if s not in exclude]
+                    + [s for s in BOSS_SKILLS_MISC if s not in exclude]
+                )
+                # De-duplicate while preserving cast order (class/raid lists overlap).
+                raid_skills = [s for s in dict.fromkeys(raid_skills) if s not in exclude]
                 await char_cog._cast_skill_group(_Shim(channel), group_name, raid_skills, "Raid Skills")
         except Exception as e:
             logger.warning("PW", f"skill cast failed for {group_name}: {e}")
