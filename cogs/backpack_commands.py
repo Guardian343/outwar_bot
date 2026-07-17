@@ -33,6 +33,7 @@ from discord.ext import commands
 from outwar import database as db, logger
 from outwar.scraper import parse_backpack_items, parse_teleport_destination
 from cogs import embed_style as es
+from cogs.pagination import paginate, chunk_lines, stamp_footers
 
 # Friendly words → the real backpack tab names used by the site.
 # The site's tabs are: potion, key, quest, regular, orb.
@@ -50,8 +51,9 @@ TAB_LABEL = {
     "regular": "General", "orb": "Orbs",
 }
 
-# Discord embeds cap around 4096 chars; keep well under and note the overflow.
-MAX_LINES = 40
+# Lines per page. Discord embeds cap around 4096 chars; 25 item lines sits well
+# under that and stays readable on a phone.
+PER_PAGE = 25
 
 
 def _resolve_tab(word: str):
@@ -255,13 +257,13 @@ class BackpackCommands(commands.Cog):
             if not names:
                 await ctx.send(f"Nothing catalogued for **{TAB_LABEL[resolved]}** yet.")
                 return
-            shown = names[:MAX_LINES * 2]
-            desc = "\n".join(f"• {n}" for n in shown)
-            if len(names) > len(shown):
-                desc += f"\n… +{len(names) - len(shown)} more"
-            await ctx.send(embed=es.info_embed(
+            lines = [f"• {n}" for n in names]
+            pages = [es.info_embed(
                 f"🗂️ Archive — {TAB_LABEL[resolved]} ({len(names)})",
-                description=desc[:4000]))
+                description="\n".join(chunk))
+                for chunk in chunk_lines(lines, PER_PAGE)]
+            stamp_footers(pages)
+            await paginate(self.bot, ctx, pages)
             return
 
         lines = [f"• **{TAB_LABEL.get(tb, tb)}** — {len(items)} item"
@@ -307,7 +309,7 @@ class BackpackCommands(commands.Cog):
             await self._count_search(ctx, t, suid, what)
 
     async def _count_tab(self, ctx, t, suid, tab):
-        """Everything in one tab, with a 'missing' line from the archive."""
+        """Everything in one tab, with a 'missing' page from the archive."""
         status = await ctx.send(f"🔎 Counting {TAB_LABEL[tab]} for **{t['name']}**…")
         try:
             items = await self._fetch_tab(tab, suid)
@@ -315,41 +317,53 @@ class BackpackCommands(commands.Cog):
             await status.edit(content=f"Failed to read {TAB_LABEL[tab]}: {e}")
             return
 
-        # Sum quantities per name (a tab can list the same item in stacks).
+        # Sum quantities per name (a tab can list the same item in several stacks).
         held = {}
         for it in items:
             held[it["item_name"]] = held.get(it["item_name"], 0) + it.get("quantity", 1)
         # Zero counts are never shown — an absent item is reported under "missing".
         held = {k: v for k, v in held.items() if v > 0}
 
-        lines = [f"`{v:>4}` × {k}" for k, v in sorted(held.items(), key=lambda x: (-x[1], x[0]))]
-        shown = lines[:MAX_LINES]
-        desc = "\n".join(shown) if shown else "_Holds none of these._"
-        if len(lines) > len(shown):
-            desc += f"\n… +{len(lines) - len(shown)} more"
+        lines = [f"`{v:>4}` × {k}"
+                 for k, v in sorted(held.items(), key=lambda x: (-x[1], x[0]))]
+        total_qty = sum(held.values())
+        header = f"**{len(held)}** distinct · **{total_qty}** total"
+
+        pages = []
+        if lines:
+            for chunk in chunk_lines(lines, PER_PAGE):
+                e = es.info_embed(f"🔎 {TAB_LABEL[tab]} — {t['name']}",
+                                  description=f"{header}\n\n" + "\n".join(chunk))
+                pages.append(e)
+        else:
+            pages.append(es.info_embed(f"🔎 {TAB_LABEL[tab]} — {t['name']}",
+                                       description="_Holds none of these._"))
 
         # Missing = catalogued for this tab, but held in zero quantity.
         archived = set(db.get_item_archive().get(tab, {}).keys())
         missing = sorted(archived - set(held.keys()))
-        if archived:
-            if missing:
-                txt = ", ".join(missing)
-                if len(txt) > 1000:
-                    txt = txt[:1000].rsplit(", ", 1)[0] + f" … +{len(missing)} total"
-                desc += f"\n\n**Missing ({len(missing)}):** {txt}"
-            else:
-                desc += "\n\n✅ **Missing:** none — holds every catalogued item."
+        if not archived:
+            pages[-1].description += (
+                f"\n\n_Nothing catalogued for {TAB_LABEL[tab]} yet, so no missing "
+                f"list. Run_ `!bp scan {tab}`_._")
+        elif not missing:
+            pages[-1].description += "\n\n✅ **Missing:** none — holds every catalogued item."
         else:
-            desc += (f"\n\n_Nothing catalogued for {TAB_LABEL[tab]} yet, so no "
-                     f"missing list. Run_ `!bp scan {tab}`_._")
+            # Missing gets its own page(s) — it can be long, and it's the bit
+            # you're usually looking for.
+            mlines = [f"• {m}" for m in missing]
+            for chunk in chunk_lines(mlines, PER_PAGE):
+                pages.append(es.info_embed(
+                    f"❌ Missing {TAB_LABEL[tab]} — {t['name']}",
+                    description=f"**{len(missing)}** catalogued item"
+                                f"{'s' if len(missing) != 1 else ''} not held\n\n"
+                                + "\n".join(chunk)))
 
-        total_qty = sum(held.values())
-        await status.edit(content=None, embed=es.info_embed(
-            f"🔎 {TAB_LABEL[tab]} — {t['name']}",
-            description=(f"**{len(held)}** distinct · **{total_qty}** total\n\n{desc}")[:4000]))
+        stamp_footers(pages)
+        await paginate(self.bot, ctx, pages, msg=status)
 
     async def _count_search(self, ctx, t, suid, needle):
-        """Substring search across every tab for one account."""
+        """Substring search across every tab for one account, paginated."""
         status = await ctx.send(f"🔎 Searching **{t['name']}** for “{needle}”…")
         needle_l = needle.strip().strip('"').lower()
 
@@ -376,16 +390,19 @@ class BackpackCommands(commands.Cog):
 
         rows = sorted(found.items(), key=lambda x: (-x[1]["qty"], x[0]))
         lines = [f"`{v['qty']:>4}` × {k}" for k, v in rows]
-        shown = lines[:MAX_LINES]
-        desc = "\n".join(shown)
-        if len(lines) > len(shown):
-            desc += f"\n… +{len(lines) - len(shown)} more"
         total = sum(v["qty"] for _, v in rows)
+        header = f"**{len(rows)}** distinct · **{total}** total"
+
+        pages = []
+        for chunk in chunk_lines(lines, PER_PAGE):
+            pages.append(es.info_embed(
+                f"🔎 “{needle}” — {t['name']}",
+                description=f"{header}\n\n" + "\n".join(chunk)))
         if errors:
-            desc += "\n\n_Some tabs failed: " + "; ".join(errors) + "_"
-        await status.edit(content=None, embed=es.info_embed(
-            f"🔎 “{needle}” — {t['name']}",
-            description=(f"**{len(rows)}** distinct · **{total}** total\n\n{desc}")[:4000]))
+            pages[-1].description += "\n\n_Some tabs failed: " + "; ".join(errors) + "_"
+
+        stamp_footers(pages)
+        await paginate(self.bot, ctx, pages, msg=status)
 
 
 async def setup(bot):
