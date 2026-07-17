@@ -618,12 +618,9 @@ class AdminCommands(commands.Cog):
         logger.info("KEY-SCAN", "\n" + "\n".join(lines))
 
         # Save to KB. Bot only auto-uses reusables; consumables flagged reserved.
-        kb = db.get_teleporters()
-        for s in teleporters:
-            kb[str(s["item_id"])] = {"name": s["item_name"],
-                                     "destination": s["destination"],
-                                     "kind": s["kind"], "room": None}
-        db.save_teleporters(kb)
+        # Uses the merging helper so a rescan NEVER wipes a room we've already
+        # mapped by hand (this used to reset "room" to None every scan).
+        _total, _new = db.merge_teleporters(teleporters)
 
         embed = es.info_embed(f"🔑 Key scan — {t['name']}")
         embed.add_field(

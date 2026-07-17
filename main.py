@@ -91,6 +91,7 @@ async def main():
         "cogs.god_monitor",
         "cogs.primewatcher",
         "cogs.misc_commands",
+        "cogs.backpack_commands",
         "cogs.utility_commands",
         "cogs.crawler_commands",
         "cogs.help_commands",

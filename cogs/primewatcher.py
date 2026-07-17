@@ -51,6 +51,18 @@ def _skill_label(p: str) -> str:
     return "no skills" if p == "none" else f"{p} skills"
 
 
+def _pot_label(pot_groups) -> str:
+    """' · Free Pots, Chaos Pots' for display, or '' when no pots are set."""
+    if not pot_groups:
+        return ""
+    try:
+        from outwar.constants import POT_GROUP_LABELS
+        names = [POT_GROUP_LABELS.get(p, p) for p in pot_groups]
+    except Exception:
+        names = list(pot_groups)
+    return " · 🧪 " + ", ".join(names)
+
+
 class PrimeWatcher(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -141,6 +153,8 @@ class PrimeWatcher(commands.Cog):
             "`!pw delete <name>` — remove a watcher\n"
             "`!pw add-group <name> <group…> [none|class|raid]` — add one or more groups (skills apply to all)\n"
             "`!pw remove-group <name> <group>`\n"
+            "`!pw skills <name> <group|all> <none|class|raid>` — change skills on a group already added\n"
+            "`!pw pots <name> <group|all> <free|zombies|potpack|highend|chaos|all|none>` — set potion groups\n"
             "`!pw add-prime <name> [caps] <god…>` — add one or more primes (bare number = shared cap; god:N per-god)\n"
             "`!pw remove-prime <name> <prime>`\n"
             "`!pw set-crew <name> <crew>` — crew to count caps for (default Legion of Death)\n\n"
@@ -235,6 +249,103 @@ class PrimeWatcher(commands.Cog):
             await ctx.send(f"✅ Removed group **{group.upper()}** from **{w['name']}**.")
         else:
             await ctx.send(f"Group **{group}** wasn't in **{w['name']}**.")
+
+    @primewatcher.command(name="skills")
+    async def pw_skills(self, ctx, name: str, group: str, tier: str = None):
+        """
+        Change the skill tier on a group that's ALREADY in a watcher — no need to
+        remove and re-add it. Takes effect on the watcher's next cast.
+
+          !pw skills <watcher> <group> class   — class skills only
+          !pw skills <watcher> <group> raid    — raid + class skills combined (no MD)
+          !pw skills <watcher> <group> none    — stop casting skills
+          !pw skills <watcher> all <tier>      — apply to every group in the watcher
+        """
+        w = self._get(name)
+        if not w:
+            await ctx.send(f"No watcher named **{name}**.")
+            return
+        if not tier or tier.lower() not in SKILL_CHOICES:
+            await ctx.send(f"Usage: `!pw skills {name} <group|all> <{'/'.join(SKILL_CHOICES)}>`")
+            return
+        tier = tier.lower()
+        if not w["groups"]:
+            await ctx.send(f"**{w['name']}** has no groups yet. Add one with `!pw add-group`.")
+            return
+
+        if group.lower() == "all":
+            for g in w["groups"]:
+                g["skills"] = tier
+            self._save(name, w)
+            await ctx.send(f"✅ All **{len(w['groups'])}** groups in **{w['name']}** "
+                           f"set to {_skill_label(tier)}.")
+            return
+
+        gu = group.upper()
+        hit = next((g for g in w["groups"] if g["group"].upper() == gu), None)
+        if not hit:
+            have = ", ".join(g["group"] for g in w["groups"]) or "none"
+            await ctx.send(f"**{gu}** isn't in **{w['name']}**. It has: {have}")
+            return
+        was = hit.get("skills", "none")
+        hit["skills"] = tier
+        self._save(name, w)
+        await ctx.send(f"✅ **{gu}** in **{w['name']}**: {_skill_label(was)} → "
+                       f"**{_skill_label(tier)}**. Applies on the next cast.")
+
+    @primewatcher.command(name="pots")
+    async def pw_pots(self, ctx, name: str, group: str, *pot_groups: str):
+        """
+        Set which potion group(s) a watcher group drinks before raiding. Can be
+        changed on a group that's already running.
+
+          !pw pots <watcher> <group> free            — one pot group
+          !pw pots <watcher> <group> free chaos      — several combined
+          !pw pots <watcher> <group> none            — stop using pots
+          !pw pots <watcher> all <groups…>           — apply to every group
+
+        Available: free, zombies, potpack, highend, chaos, all
+        """
+        from outwar.constants import POT_GROUPS, POT_GROUP_LABELS
+        w = self._get(name)
+        if not w:
+            await ctx.send(f"No watcher named **{name}**.")
+            return
+        if not pot_groups:
+            opts = ", ".join(f"`{k}`" for k in POT_GROUPS)
+            await ctx.send(f"Usage: `!pw pots {name} <group|all> <pot group…|none>`\nAvailable: {opts}")
+            return
+        if not w["groups"]:
+            await ctx.send(f"**{w['name']}** has no groups yet. Add one with `!pw add-group`.")
+            return
+
+        chosen = [p.lower() for p in pot_groups]
+        if "none" in chosen:
+            chosen = []
+        else:
+            bad = [p for p in chosen if p not in POT_GROUPS]
+            if bad:
+                opts = ", ".join(f"`{k}`" for k in POT_GROUPS)
+                await ctx.send(f"Unknown pot group{'s' if len(bad) > 1 else ''}: "
+                               f"{', '.join(bad)}\nAvailable: {opts}")
+                return
+            chosen = list(dict.fromkeys(chosen))  # de-dupe, keep order
+
+        label = (", ".join(POT_GROUP_LABELS.get(p, p) for p in chosen)
+                 if chosen else "no pots")
+        targets = w["groups"] if group.lower() == "all" else \
+            [g for g in w["groups"] if g["group"].upper() == group.upper()]
+        if not targets:
+            have = ", ".join(g["group"] for g in w["groups"]) or "none"
+            await ctx.send(f"**{group.upper()}** isn't in **{w['name']}**. It has: {have}")
+            return
+        for g in targets:
+            g["pot_groups"] = chosen
+        self._save(name, w)
+        who = f"all **{len(targets)}** groups" if group.lower() == "all" else f"**{group.upper()}**"
+        n_pots = len({p for pg in chosen for p in POT_GROUPS[pg]})
+        await ctx.send(f"✅ {who} in **{w['name']}** → **{label}**"
+                       + (f" ({n_pots} pots)" if chosen else "") + ".")
 
     # ----- primes ----------------------------------------------------------
     @primewatcher.command(name="add-prime")
@@ -386,7 +497,8 @@ class PrimeWatcher(commands.Cog):
             return
         state = "🟢 ON" if w.get("enabled") else "⚪ off"
         glines = "\n".join(
-            f"• **{g['group']}** — {_skill_label(g.get('skills', g.get('pots','none')))}" for g in w["groups"]
+            f"• **{g['group']}** — {_skill_label(g.get('skills', g.get('pots','none')))}"
+            f"{_pot_label(g.get('pot_groups'))}" for g in w["groups"]
         ) or "_none yet_"
 
         crew = w.get("crew", "Legion of Death")
@@ -540,6 +652,36 @@ class PrimeWatcher(commands.Cog):
                 await char_cog._cast_skill_group(_Shim(channel), group_name, raid_skills, "Raid Skills")
         except Exception as e:
             logger.warning("PW", f"skill cast failed for {group_name}: {e}")
+
+    async def _drink_for_group(self, group_name, pot_groups, channel):
+        """
+        Drink the configured potion group(s) on a group before it raids.
+
+        `pot_groups` is a list of POT_GROUPS keys (e.g. ["free", "chaos"]). Pots
+        across several groups are de-duplicated so nothing is drunk twice.
+
+        NOTE: potions are matched by exact in-game name against the backpack, so a
+        pot the account doesn't hold is simply reported as missing — it won't stop
+        the raid. Failures here never propagate: raiding matters more than pots.
+        """
+        if not pot_groups:
+            return
+        char_cog = self.bot.get_cog("CharacterCommands")
+        if not char_cog:
+            return
+        try:
+            from outwar.constants import POT_GROUPS
+            keys = []
+            for pg in pot_groups:
+                keys.extend(POT_GROUPS.get(pg, []))
+            keys = list(dict.fromkeys(keys))  # de-dupe across groups, keep order
+            for k in keys:
+                try:
+                    await char_cog._drink_potion(_Shim(channel), group_name, k)
+                except Exception as e:
+                    logger.warning("PW", f"pot {k} failed for {group_name}: {e}")
+        except Exception as e:
+            logger.warning("PW", f"pot cast failed for {group_name}: {e}")
 
     @staticmethod
     def _hp_from_note(note):
@@ -716,6 +858,7 @@ class PrimeWatcher(commands.Cog):
                     # Cast skills for each source group represented (skills per group).
                     for g in groups:
                         await self._cast_for_group(g["group"], g.get("skills", g.get("pots", "none")), channel)
+                        await self._drink_for_group(g["group"], g.get("pot_groups") or [], channel)
                     won, dmg, rnote = await raid_cog._do_god_raid(None, god, squad)
                     attempts += 1
                     if won:
@@ -764,6 +907,7 @@ class PrimeWatcher(commands.Cog):
 
                 skills = grp.get("skills", grp.get("pots", "none"))
                 await self._cast_for_group(gname, skills, channel)
+                await self._drink_for_group(gname, grp.get("pot_groups") or [], channel)
 
                 while got < target and attempts < 10:
                     _avail_now, capped_now, _capwarn = await raid_cog._check_group_caps(trustees, 1)

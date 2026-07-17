@@ -165,7 +165,12 @@ class OutwarSession:
         # (cooldown/active text) that likewise lacks full-page chrome — treat it as
         # a valid partial too, otherwise every MD/Last-Stand cooldown check flags
         # "unknown" and burns 5 retries.
-        if "ajax" in path_lower or "skills_info" in path_lower:
+        # item_rollover.php is the same shape: a small item tooltip fragment with
+        # no page chrome. A key scan fires one per key, so without this every
+        # `!bp scan keys` logs a warning for every key it owns.
+        if ("ajax" in path_lower
+                or "skills_info" in path_lower
+                or "item_rollover" in path_lower):
             return True
 
         # JSON response.

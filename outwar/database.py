@@ -779,3 +779,97 @@ def set_join_limit(alias: str, min_join: int, max_join: int):
     data = get_join_limits()
     data[alias] = {"min": int(min_join), "max": int(max_join)}
     save_join_limits(data)
+
+
+# ---------------------------------------------------------------------------
+# Item archive — the catalogue of item names we've actually SEEN in-game,
+# discovered by `!bp scan`. This is ground truth: names come straight from the
+# backpack pages, so nothing here is a guess.
+#
+# Why it exists: potions/keys are matched by their EXACT in-game name. Keeping a
+# scanned catalogue means we can (a) verify hand-written names, (b) list what an
+# account is MISSING, and (c) notice when Outwar adds new items.
+#
+# Shape: {tab: {item_name: {"iid": str, "first_seen": iso, "last_seen": iso}}}
+# ---------------------------------------------------------------------------
+
+def get_item_archive() -> dict:
+    """The full scanned item catalogue, keyed by backpack tab."""
+    path = _db_path("item_archive.json")
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            return json.loads(content) if content else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_item_archive(archive: dict):
+    with open(_db_path("item_archive.json"), "w", encoding="utf-8") as f:
+        json.dump(archive, f, indent=2, ensure_ascii=False)
+
+
+def merge_item_archive(tab: str, items: list) -> tuple[int, list]:
+    """
+    MERGE scanned items into the archive for one tab. Never replaces — a scan
+    runs against a single account, which won't hold every item in the game, so
+    replacing would wipe out everything that account happens not to own.
+
+    items: [{"item_name": str, "item_id": str, ...}]
+    Returns (total_in_tab_after, [newly_discovered_names]).
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    archive = get_item_archive()
+    tab_items = archive.get(tab, {})
+    new_names = []
+    for it in items:
+        name = (it.get("item_name") or "").strip()
+        if not name:
+            continue
+        if name not in tab_items:
+            tab_items[name] = {"iid": it.get("item_id", ""),
+                               "first_seen": now, "last_seen": now}
+            new_names.append(name)
+        else:
+            tab_items[name]["last_seen"] = now
+            if it.get("item_id"):
+                tab_items[name]["iid"] = it["item_id"]
+    archive[tab] = tab_items
+    save_item_archive(archive)
+    return len(tab_items), new_names
+
+
+def merge_teleporters(found: list) -> tuple[int, list]:
+    """
+    MERGE discovered teleporters into teleporters.json. Like the item archive,
+    this only ever EXPANDS — a rescan adds new finds and refreshes the
+    destination/kind, but never wipes knowledge we already have.
+
+    Critically it PRESERVES any 'room' already mapped: room numbers are worked
+    out by hand, so blindly re-writing them as None on every scan would throw
+    that work away.
+
+    found: [{"item_id", "item_name", "destination", "kind"}]
+    Returns (total_known_after, [newly_discovered_names]).
+    """
+    kb = get_teleporters()
+    new_names = []
+    for s in found:
+        key = str(s.get("item_id"))
+        if not key or key == "None":
+            continue
+        existing = kb.get(key, {})
+        if not existing:
+            new_names.append(s.get("item_name", key))
+        kb[key] = {
+            "name":        s.get("item_name") or existing.get("name", ""),
+            "destination": s.get("destination") or existing.get("destination"),
+            "kind":        s.get("kind") or existing.get("kind"),
+            # Keep any room we've already mapped — never reset it to None.
+            "room":        existing.get("room"),
+        }
+    save_teleporters(kb)
+    return len(kb), new_names

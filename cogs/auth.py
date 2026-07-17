@@ -63,6 +63,10 @@ ADMIN_COMMANDS = {
     "giveaway", "envoy-drops", "boss-pots",
     "alert-channels", "check-trustees", "check-item",
     "guard-start", "guard-stop", "envoy-pool", "envoy-fetch",
+    # !bp scan — writes the item archive and hits the site, so admin+.
+    # NOTE: the auth check reads ctx.command.name, which for a subcommand is the
+    # SUBcommand's own name ("scan"), not the group's ("bp").
+    "scan",
 }
 
 # Member — view only, no actions
