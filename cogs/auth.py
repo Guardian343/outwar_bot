@@ -67,6 +67,9 @@ ADMIN_COMMANDS = {
     # NOTE: the auth check reads ctx.command.name, which for a subcommand is the
     # SUBcommand's own name ("scan"), not the group's ("bp").
     "scan",
+    # !rare add/remove edits the highlighted-drops config. (view-only !rare is
+    # harmless but the command as a whole writes, so admin-gate it.)
+    "rare",
 }
 
 # Member — view only, no actions

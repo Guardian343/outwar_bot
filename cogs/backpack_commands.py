@@ -275,6 +275,81 @@ class BackpackCommands(commands.Cog):
 
     # ---- !count ---------------------------------------------------------
 
+    @commands.command(name="rare", aliases=["rareitems"])
+    async def rare(self, ctx, action: str = None, *, name: str = None):
+        """
+        Manage which items get highlighted (bold) in drop announcements.
+
+          !rare                    — list the current rare items
+          !rare add <text>         — highlight any drop containing this text
+          !rare remove <text>      — stop highlighting it
+
+        Matching is substring-based, so you can add a STEM to catch a whole family
+        at once: `!rare add Catalyst of` highlights every "Catalyst of X" drop.
+        Use a distinctive stem — a short one like "Fire" would also match
+        "Firepower" etc. Rare drops are bolded, NOT starred (⭐ = focused crews).
+        """
+        act = (action or "").lower()
+        if act in ("add", "remove") and name:
+            if act == "add":
+                ok = db.add_rare_item(name)
+                await ctx.send(
+                    f"✅ Drops containing **{name}** will be highlighted "
+                    f"(matches anything with that text in the name)."
+                    if ok else f"**{name}** is already on the rare list.")
+            else:
+                ok = db.remove_rare_item(name)
+                await ctx.send(f"✅ Removed **{name}** from the rare list."
+                               if ok else f"**{name}** wasn't on the rare list.")
+            return
+
+        items = db.get_rare_items()
+        if not items:
+            await ctx.send("No rare items set. Add one with `!rare add <text>` — "
+                           "e.g. `!rare add Catalyst of` bolds every Catalyst drop.")
+            return
+        desc = "\n".join(f"• {i}" for i in sorted(items))
+        await ctx.send(embed=es.info_embed(
+            f"✨ Rare Items ({len(items)})",
+            description=desc + "\n\n_Any drop containing these (as text) shows in "
+                               "**bold**. Add a stem like `Catalyst of` to catch a "
+                               "whole family._"))
+
+    @commands.command(name="pots", aliases=["potgroups", "potions"])
+    async def pots(self, ctx, group: str = None):
+        """
+        Show the potion groups (the sets you can cast with !pw pots).
+
+          !pots           — list every group and how many pots it holds
+          !pots free      — list the actual potions in one group
+        """
+        from outwar.constants import POT_GROUPS, POT_GROUP_LABELS, POTIONS
+
+        if group:
+            key = group.strip().lower()
+            if key not in POT_GROUPS:
+                opts = ", ".join(f"`{k}`" for k in POT_GROUPS)
+                await ctx.send(f"Unknown pot group `{group}`. Try: {opts}")
+                return
+            names = [POTIONS.get(p, p) for p in POT_GROUPS[key]]
+            desc = "\n".join(f"• {n}" for n in names)
+            await ctx.send(embed=es.info_embed(
+                f"🧪 {POT_GROUP_LABELS.get(key, key)} ({len(names)} pots)",
+                description=desc))
+            return
+
+        # Overview of all groups.
+        lines = []
+        for k, pots in POT_GROUPS.items():
+            label = POT_GROUP_LABELS.get(k, k)
+            preview = ", ".join(POTIONS.get(p, p) for p in pots[:3])
+            more = f" +{len(pots) - 3} more" if len(pots) > 3 else ""
+            lines.append(f"**{label}** (`{k}`) — {len(pots)} pots\n   _{preview}{more}_")
+        await ctx.send(embed=es.info_embed(
+            "🧪 Potion Groups",
+            description="\n".join(lines)
+            + "\n\n`!pots <group>` for the full list · `!pw pots <watcher> <group>` to assign."))
+
     @commands.command(name="count")
     async def count(self, ctx, what: str = None, *, account: str = None):
         """

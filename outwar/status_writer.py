@@ -110,18 +110,68 @@ def publish_gods(gods):
 
 def publish_bosses(bosses):
     """
-    bosses: iterable of Boss objects (name, full_name, spawned, hp, hp_pct).
-    Publishes the current boss roster with live HP (absolute + %).
+    bosses: iterable of Boss objects (name, full_name, spawned, hp, hp_pct,
+    spawn_days, last_killed).
+
+    Publishes the current boss roster with live HP, plus spawn-window timing so
+    the dashboard can show "in window" and a meaningful countdown:
+      - window_open_at: ISO time the spawn window opens (killed + 75% of the
+        spawn interval), or None if we can't work it out yet.
+      - in_window: True once now >= window_open_at (and not currently spawned).
     """
+    from datetime import datetime, timezone, timedelta
     try:
+        # Import lazily so this module stays dependency-free if the DB isn't set up.
+        try:
+            from outwar import database as _db
+        except Exception:
+            _db = None
+
+        def _window_open_at(b):
+            """When this boss's spawn window opens, as a UTC datetime, or None."""
+            spawn_days = getattr(b, "spawn_days", 0) or 0
+            if not spawn_days:
+                return None
+            killed_dt = None
+            if _db is not None:
+                try:
+                    killed_dt = _db.get_boss_death_dt(getattr(b, "full_name", ""))
+                except Exception:
+                    killed_dt = None
+            # Fall back to the page's kill string (assumed CST) if we've no record.
+            if not killed_dt:
+                raw = getattr(b, "last_killed", "") or ""
+                if raw:
+                    import re
+                    clean = re.sub(r"<[^>]+>", "", raw).strip()
+                    for fmt in ("%a, %d %b %Y %I:%M%p", "%a, %d %b %Y %I:%M %p",
+                                "%m-%d-%y %I:%M%p", "%Y-%m-%d %H:%M"):
+                        try:
+                            cst = timezone(timedelta(hours=-6))
+                            killed_dt = datetime.strptime(clean, fmt).replace(tzinfo=cst)
+                            break
+                        except ValueError:
+                            continue
+            if not killed_dt:
+                return None
+            # Window opens at killed + 75% of the spawn interval (matches the bot's
+            # own window logic in god_monitor).
+            return killed_dt + timedelta(days=spawn_days) * 0.75
+
+        now = datetime.now(timezone.utc)
         payload = []
         for b in bosses:
+            spawned = bool(getattr(b, "spawned", False))
+            open_at = None if spawned else _window_open_at(b)
+            in_window = bool(open_at and now >= open_at) and not spawned
             payload.append({
                 "name": getattr(b, "name", "") or getattr(b, "full_name", ""),
                 "full_name": getattr(b, "full_name", ""),
-                "spawned": bool(getattr(b, "spawned", False)),
+                "spawned": spawned,
                 "hp": int(getattr(b, "hp", 0) or 0),
                 "hp_pct": float(getattr(b, "hp_pct", 0.0) or 0.0),
+                "in_window": in_window,
+                "window_open_at": open_at.isoformat() if open_at else None,
             })
         _update("bosses", payload)
     except Exception:

@@ -48,7 +48,16 @@ def _aggregate_loot_display(entry: dict):
         if pm:
             points += int(pm.group(1)) * count
         else:
-            others.append(f"{name} x{count}" if count > 1 else name)
+            label = f"{name} x{count}" if count > 1 else name
+            # Highlight rare/high-end drops in bold so top-tier items stand out
+            # at a glance. Deliberately NOT starred — the ⭐ marks focused crews,
+            # and mixing the two would muddy both signals.
+            try:
+                if db.is_rare_item(name):
+                    label = f"**{label}**"
+            except Exception:
+                pass
+            others.append(label)
 
     display = list(others)
     if points > 0:
@@ -76,7 +85,13 @@ def _format_focus_drops(rec: dict) -> str:
         if pm:
             points += int(pm.group(1)) * count
         else:
-            parts.append(f"{name} x{count}" if count > 1 else name)
+            label = f"{name} x{count}" if count > 1 else name
+            try:
+                if db.is_rare_item(name):
+                    label = f"**{label}**"
+            except Exception:
+                pass
+            parts.append(label)
     if points > 0:
         parts.append(f"Points x{points}")
     return ", ".join(parts) if parts else "No focused drops yesterday"

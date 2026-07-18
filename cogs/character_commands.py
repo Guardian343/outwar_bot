@@ -599,16 +599,23 @@ class CharacterCommands(commands.Cog):
         results = await asyncio.gather(*[self._fetch_character(n) for n in names])
         return [c for c in results if c]
 
-    async def _cast_skill_group(self, ctx, target: str, skill_ids: list, group_label: str):
-        """Cast a group of skills on all characters in a target."""
+    async def _cast_skill_group(self, ctx, target: str, skill_ids: list, group_label: str, quiet: bool = False):
+        """Cast a group of skills on all characters in a target.
+
+        quiet=True suppresses the progress and report messages (the caller shows
+        its own summary) — used by primewatcher so a raid cycle doesn't spam a
+        full breakdown for every group. Returns (total_cast, total_skipped).
+        """
         trustees = self._resolve_target(target)
         if not trustees:
-            await ctx.send(f"No characters found for `{target}`.")
-            return
+            if not quiet:
+                await ctx.send(f"No characters found for `{target}`.")
+            return (0, 0)
 
-        await ctx.send(
-            f"Casting **{group_label}** skills on **{len(trustees)}** character(s)..."
-        )
+        if not quiet:
+            await ctx.send(
+                f"Casting **{group_label}** skills on **{len(trustees)}** character(s)..."
+            )
 
         results = {}  # name -> {cast, skipped}
 
@@ -646,7 +653,9 @@ class CharacterCommands(commands.Cog):
                 f"⚠️ **{total_skip}** skipped"
             )
         )
-        await ctx.send(embed=embed)
+        if not quiet:
+            await ctx.send(embed=embed)
+        return (total_cast, total_skip)
 
     async def _cast_skill_for_group(self, ctx, group: str, skill_id: int):
         trustees = self._resolve_target(group)
@@ -678,14 +687,16 @@ class CharacterCommands(commands.Cog):
         await asyncio.gather(*[_cast(t) for t in trustees])
         await ctx.send(f"**{skill_name}** cast on {success}/{len(trustees)} characters.")
 
-    async def _drink_potion(self, ctx, crew_or_group: str, potion_key: str):
+    async def _drink_potion(self, ctx, crew_or_group: str, potion_key: str, quiet: bool = False):
         potion_name = POTIONS.get(potion_key.lower())
         if not potion_name:
-            await ctx.send(f"Unknown potion: `{potion_key}`")
+            if not quiet:
+                await ctx.send(f"Unknown potion: `{potion_key}`")
             return
 
         trustees = self._resolve_target(crew_or_group)
-        await ctx.send(f"Using **{potion_name}** for {len(trustees)} characters...")
+        if not quiet:
+            await ctx.send(f"Using **{potion_name}** for {len(trustees)} characters...")
         used           = []
         already_active = []
         missing        = []
@@ -736,6 +747,11 @@ class CharacterCommands(commands.Cog):
 
         await asyncio.gather(*[_use_potion(t) for t in trustees])
 
+        if quiet:
+            # PW shows its own one-line summary; return counts for it to tally.
+            return {"used": len(used), "already_active": len(already_active),
+                    "missing": len(missing), "errors": len(errors)}
+
         embed = es.report_embed(f"🧪 Potion Report — {potion_name}")
         embed.add_field(
             name=f"✅ Used ({len(used)})",
@@ -761,6 +777,8 @@ class CharacterCommands(commands.Cog):
                 inline=False
             )
         await ctx.send(embed=embed)
+        return {"used": len(used), "already_active": len(already_active),
+                "missing": len(missing), "errors": len(errors)}
 
     @staticmethod
     def _add_char_field(embed: discord.Embed, title: str, chars: list):

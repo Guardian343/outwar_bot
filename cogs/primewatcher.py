@@ -621,17 +621,22 @@ class PrimeWatcher(commands.Cog):
         rotated = groups[rot:] + groups[:rot]
         return {prime: rotated[i % n] for i, prime in enumerate(prime_names)}
 
-    async def _cast_for_group(self, group_name, skills, channel):
-        """Cast the configured skills on a group before it raids."""
+    async def _cast_for_group(self, group_name, skills, channel, quiet=False):
+        """Cast the configured skills on a group before it raids.
+
+        Returns the number of skills cast (0 if none/failed). quiet=True keeps the
+        underlying cast from posting its own report — the caller summarises.
+        """
         if skills == "none":
-            return
+            return 0
         char_cog = self.bot.get_cog("CharacterCommands")
         if not char_cog:
-            return
+            return 0
         try:
             if skills == "class":
                 from cogs.character_commands import CLASS_SKILLS
-                await char_cog._cast_skill_group(_Shim(channel), group_name, CLASS_SKILLS, "Class")
+                r = await char_cog._cast_skill_group(_Shim(channel), group_name, CLASS_SKILLS, "Class", quiet=quiet)
+                return (r[0] if isinstance(r, tuple) else 0)
             elif skills == "raid":
                 from outwar.constants import CLASS_SKILLS, Skill
                 from cogs.boss_raid_commands import (
@@ -649,26 +654,86 @@ class PrimeWatcher(commands.Cog):
                 )
                 # De-duplicate while preserving cast order (class/raid lists overlap).
                 raid_skills = [s for s in dict.fromkeys(raid_skills) if s not in exclude]
-                await char_cog._cast_skill_group(_Shim(channel), group_name, raid_skills, "Raid Skills")
+                r = await char_cog._cast_skill_group(_Shim(channel), group_name, raid_skills, "Raid Skills", quiet=quiet)
+                return (r[0] if isinstance(r, tuple) else 0)
         except Exception as e:
             logger.warning("PW", f"skill cast failed for {group_name}: {e}")
+        return 0
 
-    async def _drink_for_group(self, group_name, pot_groups, channel):
+    async def _prep_group(self, group_name, skills, pot_groups, channel):
+        """
+        Cast a group's skills and drink its pots before raiding, showing ONE line
+        that gets edited to a timing summary — no per-skill/per-potion breakdown.
+
+        e.g.  "🧪 LOD11 — casting skills + pots…"
+          ->  "✅ LOD11 — skills + pots cast in 4.2s"
+        """
+        has_skills = skills and skills != "none"
+        has_pots = bool(pot_groups)
+        if not has_skills and not has_pots:
+            return
+
+        what = " + ".join(([("skills")] if has_skills else []) + (["pots"] if has_pots else []))
+        status = None
+        try:
+            status = await channel.send(f"🧪 **{group_name}** — casting {what}…")
+        except Exception:
+            status = None
+
+        import time as _t
+        t0 = _t.monotonic()
+        n_skills = 0
+        pot_tally = {"used": 0, "missing": 0}
+        try:
+            if has_skills:
+                n_skills = await self._cast_for_group(group_name, skills, channel, quiet=True)
+            if has_pots:
+                tally = await self._drink_for_group(group_name, pot_groups, channel, quiet=True)
+                if isinstance(tally, dict):
+                    pot_tally = tally
+        except Exception as e:
+            logger.warning("PW", f"prep failed for {group_name}: {e}")
+
+        secs = _t.monotonic() - t0
+        # Build a compact result summary.
+        bits = []
+        if has_skills:
+            bits.append(f"{n_skills} skill{'s' if n_skills != 1 else ''}")
+        if has_pots:
+            p = f"{pot_tally.get('used', 0)} pot{'s' if pot_tally.get('used', 0) != 1 else ''}"
+            if pot_tally.get("missing"):
+                p += f" ({pot_tally['missing']} missing)"
+            bits.append(p)
+        summary = " + ".join(bits) if bits else what
+        msg = f"✅ **{group_name}** — {summary} in {secs:.1f}s"
+        try:
+            if status:
+                await status.edit(content=msg)
+            else:
+                await channel.send(msg)
+        except Exception:
+            pass
+
+    async def _drink_for_group(self, group_name, pot_groups, channel, quiet=False):
         """
         Drink the configured potion group(s) on a group before it raids.
 
         `pot_groups` is a list of POT_GROUPS keys (e.g. ["free", "chaos"]). Pots
         across several groups are de-duplicated so nothing is drunk twice.
 
+        Returns an aggregated {"used", "missing"} tally across all pots. quiet=True
+        keeps each potion from posting its own report — the caller summarises.
+
         NOTE: potions are matched by exact in-game name against the backpack, so a
         pot the account doesn't hold is simply reported as missing — it won't stop
         the raid. Failures here never propagate: raiding matters more than pots.
         """
+        tally = {"used": 0, "missing": 0}
         if not pot_groups:
-            return
+            return tally
         char_cog = self.bot.get_cog("CharacterCommands")
         if not char_cog:
-            return
+            return tally
         try:
             from outwar.constants import POT_GROUPS
             keys = []
@@ -677,11 +742,15 @@ class PrimeWatcher(commands.Cog):
             keys = list(dict.fromkeys(keys))  # de-dupe across groups, keep order
             for k in keys:
                 try:
-                    await char_cog._drink_potion(_Shim(channel), group_name, k)
+                    r = await char_cog._drink_potion(_Shim(channel), group_name, k, quiet=quiet)
+                    if isinstance(r, dict):
+                        tally["used"] += r.get("used", 0)
+                        tally["missing"] += r.get("missing", 0)
                 except Exception as e:
                     logger.warning("PW", f"pot {k} failed for {group_name}: {e}")
         except Exception as e:
             logger.warning("PW", f"pot cast failed for {group_name}: {e}")
+        return tally
 
     @staticmethod
     def _hp_from_note(note):
@@ -855,10 +924,10 @@ class PrimeWatcher(commands.Cog):
                         break
                     squad = pool[:need]           # top `need` by caps available
                     groups_used = ["(open pool)"]
-                    # Cast skills for each source group represented (skills per group).
+                    # Cast skills + pots for each source group (one line each).
                     for g in groups:
-                        await self._cast_for_group(g["group"], g.get("skills", g.get("pots", "none")), channel)
-                        await self._drink_for_group(g["group"], g.get("pot_groups") or [], channel)
+                        await self._prep_group(g["group"], g.get("skills", g.get("pots", "none")),
+                                               g.get("pot_groups") or [], channel)
                     won, dmg, rnote = await raid_cog._do_god_raid(None, god, squad)
                     attempts += 1
                     if won:
@@ -906,8 +975,7 @@ class PrimeWatcher(commands.Cog):
                     break
 
                 skills = grp.get("skills", grp.get("pots", "none"))
-                await self._cast_for_group(gname, skills, channel)
-                await self._drink_for_group(gname, grp.get("pot_groups") or [], channel)
+                await self._prep_group(gname, skills, grp.get("pot_groups") or [], channel)
 
                 while got < target and attempts < 10:
                     _avail_now, capped_now, _capwarn = await raid_cog._check_group_caps(trustees, 1)

@@ -873,3 +873,47 @@ def merge_teleporters(found: list) -> tuple[int, list]:
         }
     save_teleporters(kb)
     return len(kb), new_names
+
+
+# ---------------------------------------------------------------------------
+# Rare / high-end item list — the item names you want highlighted in drop
+# announcements. Stored as a simple list in settings.json under "rare_items".
+# Matching is case-insensitive and substring-based, so "Vial of Insanity" as an
+# entry will highlight "Vial of Insanity" however it's phrased in a drop line.
+# ---------------------------------------------------------------------------
+
+def get_rare_items() -> list:
+    """The list of item-name fragments to highlight in drops (lowercased)."""
+    s = get_settings()
+    items = s.get("rare_items", [])
+    return [str(x).strip() for x in items if str(x).strip()]
+
+
+def add_rare_item(name: str) -> bool:
+    """Add a name to the rare list. Returns False if it was already there."""
+    s = get_settings()
+    items = s.get("rare_items", [])
+    if any(name.strip().lower() == x.strip().lower() for x in items):
+        return False
+    items.append(name.strip())
+    s["rare_items"] = items
+    save_settings(s)
+    return True
+
+
+def remove_rare_item(name: str) -> bool:
+    """Remove a name from the rare list. Returns False if it wasn't there."""
+    s = get_settings()
+    items = s.get("rare_items", [])
+    kept = [x for x in items if x.strip().lower() != name.strip().lower()]
+    if len(kept) == len(items):
+        return False
+    s["rare_items"] = kept
+    save_settings(s)
+    return True
+
+
+def is_rare_item(item_name: str) -> bool:
+    """True if item_name contains any configured rare fragment (case-insensitive)."""
+    low = (item_name or "").lower()
+    return any(frag.lower() in low for frag in get_rare_items())
