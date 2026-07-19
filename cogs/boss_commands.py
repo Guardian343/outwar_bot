@@ -58,13 +58,14 @@ class BossCommands(commands.Cog):
                 "`!boss single <group> [boss]` — one round, no skills\n"
                 "`!boss stop` — stop the session · `!boss status` — live stats\n"
                 "`!boss group` — accounts in session · `!boss proceed` — confirm partial raid\n"
-                "`!boss records` — all-time best damage · `!boss pots <crew>` — boss pots\n\n"
+                "`!boss pots <crew>` — boss pots · `!boss reset-md` — reset Markdown state\n\n"
                 "**Info**\n"
+                "`!boss list` — all bosses and their status\n"
+                "`!boss records` — all-time best damage\n"
                 "`!boss dmg <name>` — live damage table for a spawned boss\n"
                 "`!boss drops <name>` — drop table after a boss is killed\n"
-                "`!boss window <boss> <desc>` — set a spawn window\n"
-                "`!bosslist` — all bosses and their status\n\n"
-                "Every action also has its classic name (e.g. `!boss-stop`, `!autoboss`)."
+                "`!boss window <boss> <desc>` — set a spawn window\n\n"
+                "_Classic names (`!autoboss`, `!bosslist`, `!boss-stop`…) still work._"
             )
         )
         await ctx.send(embed=embed)
@@ -124,6 +125,16 @@ class BossCommands(commands.Cog):
     async def boss_window_sub(self, ctx, *, rest: str = ""):
         """Set a boss spawn window. Same as !boss-window."""
         await self._redispatch(ctx, "boss-window", rest)
+
+    @boss.command(name="list", aliases=["all"])
+    async def boss_list_sub(self, ctx, *, rest: str = ""):
+        """All bosses and their status. Same as !bosslist."""
+        await self._redispatch(ctx, "bosslist", rest)
+
+    @boss.command(name="reset-md", aliases=["resetmd", "reset"])
+    async def boss_reset_md_sub(self, ctx, *, rest: str = ""):
+        """Reset Markdown skill state before a raid. Same as !reset-md."""
+        await self._redispatch(ctx, "reset-md", rest)
 
     @boss.command(name="dmg")
     async def boss_dmg(self, ctx, *, name: str):

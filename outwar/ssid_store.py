@@ -224,3 +224,44 @@ async def validate_ssid(ssid: str, server_id: int = 1):
     if not roster:
         return False, "", []
     return True, roster[0]["name"], roster
+
+
+# --- SSID-authenticated per-character requests ------------------------------
+# Outwar uses ONE RGA-wide session (rg_sess_id); `suid` names which character a
+# request is for. Every request just carries rg_sess_id + suid + serverid as
+# params, cookielessly — no separate "switch" step. This is how we act as each
+# character on a stored RGA without the bot being logged into it.
+
+def _sess_url(path: str, ssid: str, suid, server_id: int, extra: str = "") -> str:
+    host = _SERVER_HOST.get(int(server_id), _SERVER_HOST[1])
+    sep = "&" if "?" in path else "?"
+    url = (f"{host}/{path.lstrip('/')}{sep}rg_sess_id={ssid}"
+           f"&suid={suid}&serverid={int(server_id)}")
+    if extra:
+        url += "&" + extra.lstrip("&")
+    return url
+
+
+async def sess_get(path: str, ssid: str, suid, server_id: int = 1) -> str:
+    """GET a path as a specific character on the RGA (cookieless, SSID-auth)."""
+    import aiohttp
+    url = _sess_url(path, ssid, suid, server_id)
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
+                return await r.text()
+    except Exception:
+        return ""
+
+
+async def sess_post(path: str, data: dict, ssid: str, suid, server_id: int = 1) -> str:
+    """POST a form as a specific character on the RGA (cookieless, SSID-auth)."""
+    import aiohttp
+    url = _sess_url(path, ssid, suid, server_id)
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(url, data=data,
+                                 timeout=aiohttp.ClientTimeout(total=30)) as r:
+                return await r.text()
+    except Exception:
+        return ""

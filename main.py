@@ -93,6 +93,7 @@ async def main():
         "cogs.misc_commands",
         "cogs.backpack_commands",
         "cogs.ssid_commands",
+        "cogs.supplies_commands",
         "cogs.utility_commands",
         "cogs.crawler_commands",
         "cogs.help_commands",

@@ -54,31 +54,32 @@ OWNER_COMMANDS = {
 
 # Admin — can control raiding, casting, bot actions
 ADMIN_COMMANDS = {
-    "autoboss", "boss-stop", "boss-proceed", "boss-group", "raidboss", "boss-window", "bossraid",
-    "cast", "cast-all", "cast-afflic", "cast-class", "cast-fero", "cast-pres", "cast-ss",
-    "drink", "drink-all", "reset-md",
-    "rg", "rq", "rm", "rmdebug", "god-set", "god-rec-import", "primeupdate",
-    "primewatcher", "pw",
-    "crawl", "crawl-stop", "poll-now",
-    "giveaway", "envoy-drops", "boss-pots",
-    "alert-channels", "check-trustees", "check-item",
-    "guard-start", "guard-stop", "envoy-pool", "envoy-fetch",
+    # System / data-refresh actions (Liam's ruling: admin).
+    "reset-md", "rmdebug", "god-set", "god-rec-import", "primeupdate", "poll-now",
+    # god group admin subcommands — gate by qualified name so a member is blocked
+    # at the group directly (not only when the redispatch hits the classic name).
+    "god set", "god import", "god update",
+    # Read-only inspection kept restricted (Liam's ruling: admin).
+    "check-trustees", "check-item",
+    # Account / crew / config altering — stay admin+.
+    "crawl", "crawl-stop", "giveaway", "envoy-drops",
+    "alert-channels", "guard-start", "guard-stop", "envoy-pool", "envoy-fetch",
     # !bp scan — writes the item archive and hits the site, so admin+.
-    # NOTE: the auth check reads ctx.command.name, which for a subcommand is the
-    # SUBcommand's own name ("scan"), not the group's ("bp").
     "scan",
-    # !rare add/remove edits the highlighted-drops config. (view-only !rare is
-    # harmless but the command as a whole writes, so admin-gate it.)
+    # !rare add/remove edits the highlighted-drops config.
     "rare",
+    # !supplies acts on every character of an RGA (buy max + set stance).
+    "supplies",
 }
 
-# Member — view only, no actions
+# Member — can run raids, PW, and boss raids, plus all viewing. What they CANNOT
+# do is alter crews/accounts/config or trigger system actions (those are admin+).
 MEMBER_COMMANDS = {
     "status", "ping", "health",
     "gods", "up", "god", "god-list", "god-export", "beatable", "can-beat", "canbeat", "prime-stats", "prime-drops",
     "bosslist", "boss-status", "boss-records", "boss",
     "envoy-shop", "cast-raid",
-    "check-md", "check-md",
+    "check-md",
     "commands", "todo", "complete",
     "alias", "aliases", "crews", "groups",
     "compare", "skills", "show-mr", "get-sessid",
@@ -86,6 +87,12 @@ MEMBER_COMMANDS = {
     "rage", "who", "top", "bottom", "top-all",
     "group-stats", "pcaps", "eligible", "uncapped",
     "badge", "tce", "crest", "rg", "rq",
+    # --- Running raids / PW / boss raids (members may do these) ---
+    "autoboss", "bossraid", "raidboss",
+    "boss-group", "boss-proceed", "boss-stop", "boss-window", "boss-pots",
+    "pw", "primewatcher",
+    "cast", "cast-all", "cast-afflic", "cast-class", "cast-fero", "cast-pres", "cast-ss",
+    "drink", "drink-all", "rm",
 }
 
 
@@ -104,32 +111,57 @@ def is_authorised(user_id: int, min_level: str = "member") -> bool:
 # ---------------------------------------------------------------------------
 
 async def global_auth_check(ctx: commands.Context) -> bool:
-    cmd        = ctx.command.name if ctx.command else ""
+    # Build the set of names this command could be gated under. For a subcommand
+    # like `!pw create`, ctx.command.name is just "create" — which loses the
+    # group and lets it fall through to member-level. So we check every relevant
+    # name: the fully-qualified "pw create", the leaf "create", AND the parent
+    # group "pw". A command is gated at the STRICTEST tier any of these appears in.
+    if ctx.command:
+        qualified = ctx.command.qualified_name           # e.g. "pw create"
+        leaf = ctx.command.name                           # e.g. "create"
+        parent = ctx.command.parent.qualified_name if ctx.command.parent else None
+    else:
+        qualified = leaf = parent = ""
+
     user_id    = ctx.author.id
     user_level = "owner" if user_id == OWNER_ID else db.get_user_level(user_id)
     order      = {"owner": 3, "admin": 2, "member": 1, "none": 0}
     user_order = order.get(user_level, 0)
 
-    # Public — anyone may run, regardless of access level
-    if cmd in PUBLIC_COMMANDS:
-        return True
+    def _tier(name):
+        """Which tier a specific name is gated at, or None if unlisted."""
+        if name in OWNER_COMMANDS:
+            return 3
+        if name in ADMIN_COMMANDS:
+            return 2
+        if name in MEMBER_COMMANDS:
+            return 1
+        if name in PUBLIC_COMMANDS:
+            return 0
+        return None
 
-    # Owner only
-    if cmd in OWNER_COMMANDS:
-        if user_order >= 3:
+    # Resolve the required tier. An EXPLICIT entry for the subcommand (by its
+    # qualified name "pw show" or leaf "show") wins — this lets a view-only
+    # subcommand opt DOWN from an otherwise admin-gated group. If the subcommand
+    # isn't explicitly listed, it INHERITS the parent group's tier. This both
+    # fixes the old gap (subcommands leaking to member) AND keeps `!pw show`
+    # readable while `!pw create` stays gated.
+    required = _tier(qualified)
+    if required is None:
+        required = _tier(leaf)
+    if required is None and parent:
+        required = _tier(parent)
+
+    if required is None:
+        # Unlisted command — default to member+ (the historical behaviour).
+        if user_order >= 1:
             return True
-        raise commands.CheckFailure("owner_only")
-
-    # Admin+ (raiding, casting, actions)
-    if cmd in ADMIN_COMMANDS:
-        if user_order >= 2:
-            return True
-        raise commands.CheckFailure("admin_only")
-
-    # Member+ (viewing, read-only)
-    if user_order >= 1:
+        raise commands.CheckFailure("unauthorised")
+    if required == 0:
+        return True                      # public
+    if user_order >= required:
         return True
-    raise commands.CheckFailure("unauthorised")
+    raise commands.CheckFailure("owner_only" if required == 3 else "admin_only")
 
 
 # ---------------------------------------------------------------------------

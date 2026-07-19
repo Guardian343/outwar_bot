@@ -16,18 +16,19 @@ CATEGORIES = {
     "raiding": {
         "title": "Boss Raiding",
         "emoji": "🔨",
-        "description": "Crew boss raiding. Fire !autoboss once and it runs hands-free. Tip: these also work as `!boss <action>` — e.g. `!boss raid lod 100`, `!boss stop`.",
+        "description": "Crew boss raiding. Fire `!boss auto` once and it runs hands-free. Classic names (`!autoboss`, `!boss-stop`…) still work.",
         "commands": [
-            ("!autoboss <group> [boss]",        "Auto-raid spawned bosses hands-free until stopped — casts skills, raids, pots in the background, and survives MD recharges. Fire once."),
-            ("!bossraid <group> [count] [boss]", "Raid a crew boss a set number of times (or until stopped). No skills/pots. e.g. !bossraid lod 100 cosmos"),
-            ("!raidboss <group> [boss]",         "Do a single round of boss raids without casting skills"),
-            ("!boss-stop",                       "Stop the running autoboss / bossraid session"),
-            ("!boss-status",                     "Live session stats — raids, damage, MD, current boss"),
-            ("!boss-group",                      "Show the accounts in the current session"),
-            ("!boss-records",                    "All-time best raid damage per boss"),
-            ("!boss-pots <crew>",                "Use boss-specific potions on a crew"),
-            ("!boss-proceed",                    "Confirm a partial-readiness raid when autoboss prompts"),
-            ("!reset-md",                        "Reset stored Markdown state for the group"),
+            ("!boss auto <group> [boss]",        "Auto-raid spawned bosses hands-free until stopped — casts skills, raids, pots in the background, and survives MD recharges. Fire once."),
+            ("!boss raid <group> [count] [boss]", "Raid a crew boss a set number of times (or until stopped). No skills/pots. e.g. !boss raid lod 100 cosmos"),
+            ("!boss single <group> [boss]",       "Do a single round of boss raids without casting skills"),
+            ("!boss stop",                        "Stop the running session"),
+            ("!boss status",                      "Live session stats — raids, damage, MD, current boss"),
+            ("!boss group",                       "Show the accounts in the current session"),
+            ("!boss records",                     "All-time best raid damage per boss"),
+            ("!boss pots <crew>",                 "Use boss-specific potions on a crew"),
+            ("!boss proceed",                     "Confirm a partial-readiness raid when it prompts"),
+            ("!boss list",                        "Boss status image with HP% and spawn windows"),
+            ("!boss reset-md",                    "Reset stored Markdown state for the group (admin)"),
         ]
     },
     "primeraids": {
@@ -66,18 +67,19 @@ CATEGORIES = {
     "gods": {
         "title": "Prime Gods",
         "emoji": "⚡",
-        "description": "Prime God database, status, drops and info.",
+        "description": "Prime God database, status, drops and info. Classic names (`!up`, `!gods`, `!god-list`…) still work.",
         "commands": [
-            ("!up",                              "Show spawned gods with time remaining and rec stats"),
-            ("!gods",                            "Show currently spawned gods"),
-            ("!god <name>",                      "Full details for a god including win stats"),
-            ("!god-list",                        "Reference table — all gods with aliases and rec stats"),
+            ("!god up",                          "Spawned gods with time remaining + live-stats dropdown"),
+            ("!god info <name>",                 "Full details for a god including win stats"),
+            ("!god list",                        "Reference table — all gods with aliases and rec stats"),
+            ("!god export",                      "Export live recommended power/ele/chaos to a .txt"),
             ("!beatable <group> [strict]",       "Gods a group can beat — avg (or 'strict' = all members) vs rec"),
-            ("!god-set <name> <field> <value>",  "Update a god field"),
+            ("!god set <name> <field> <value>",  "Update a god field (admin)"),
+            ("!god import <block>",              "Bulk-set recs from a stats block (admin)"),
             ("!prime-stats <god>",               "Show crew kill stats for a god"),
             ("!prime-drops <god>",               "Show drop table for a god"),
-            ("!primeupdate",                     "Scrape all Prime God pages and rebuild the database"),
-            ("!poll-now",                        "Force an immediate god/envoy poll"),
+            ("!god update",                      "Scrape all Prime God pages and rebuild the database (admin)"),
+            ("!poll-now",                        "Force an immediate god/envoy poll (admin)"),
             ("!envoys",                          "Show current envoy spawn status"),
             ("!envoy-pool [number]",             "View or set the current envoy loot pool number"),
             ("!envoy-shop",                      "Display the Envoy Quartermaster shop"),
@@ -91,8 +93,8 @@ CATEGORIES = {
         "emoji": "💀",
         "description": "Server boss status and spawn windows.",
         "commands": [
-            ("!bosslist",                        "Boss status image with HP% and spawn windows"),
-            ("!boss-window <boss> <desc>",       "Set spawn window description for a boss"),
+            ("!boss list",                        "Boss status image with HP% and spawn windows"),
+            ("!boss window <boss> <desc>",       "Set spawn window description for a boss"),
         ]
     },
     "stats": {
@@ -320,9 +322,9 @@ class HelpCommands(commands.Cog):
         embed.add_field(
             name="👀 See what's up",
             value=(
-                "`!up` — spawned Prime Gods (pick one for live stats)\n"
-                "`!gods` — quick spawned-god list\n"
-                "`!bosslist` — server boss status"
+                "`!god up` — spawned Prime Gods (pick one for live stats)\n"
+                "`!god info <name>` — details for one god\n"
+                "`!boss list` — server boss status"
             ),
             inline=False,
         )
@@ -338,9 +340,9 @@ class HelpCommands(commands.Cog):
         embed.add_field(
             name="⚔️ Raiding (admin)",
             value=(
-                "`!autoboss <group>` — start hands-free boss raids (fire once)\n"
-                "`!bossraid <group> [count]` — raid a crew boss without skills/pots\n"
-                "`!boss-status` — live progress · `!boss-stop` — stop"
+                "`!boss auto <group>` — start hands-free boss raids (fire once)\n"
+                "`!boss raid <group> [count]` — raid a crew boss without skills/pots\n"
+                "`!boss status` — live progress · `!boss stop` — stop"
             ),
             inline=False,
         )
@@ -416,7 +418,7 @@ class HelpCommands(commands.Cog):
             description=(
                 "**New here? Type `!guide`** for a 30-second walkthrough.\n\n"
                 "Browse a category with `!help <category>`, or get details on any single "
-                "command with `!help <command>` (e.g. `!help bossraid`)."
+                "command with `!help <command>` (e.g. `!help boss`)."
             ),
             color=es.COLOR_INFO,
         )

@@ -306,6 +306,74 @@ class RaidCommands(commands.Cog):
     # !gods
     # ------------------------------------------------------------------
 
+    @commands.group(name="god", invoke_without_command=True)
+    async def god(self, ctx, *, name: str = None):
+        """God command hub. Use !god <action> — e.g. !god up, !god info cosmos"""
+        # Bare `!god` shows the hub. A stray `!god <something>` is almost always
+        # someone reaching for `!god info <name>`, so nudge them there rather than
+        # silently doing nothing.
+        if name:
+            await ctx.send(f"Did you mean `!god info {name}`? "
+                           f"Use `!god info <name>` for a specific Prime God.")
+            return
+        embed = es.info_embed(
+            "⚔️ Prime God Commands",
+            description=(
+                "**Live**\n"
+                "`!god up` — spawned gods with time remaining + live-stats dropdown\n"
+                "`!god info <name>` — full details for one Prime God\n\n"
+                "**Reference**\n"
+                "`!god list` — full god table (size, rec power/ele/chaos)\n"
+                "`!god export` — export live recs to a .txt\n\n"
+                "**Manage** (admin)\n"
+                "`!god set <name> <field> <value>` — edit a god's data\n"
+                "`!god import <block>` — bulk-set recs from a stats block\n"
+                "`!god update` — rescrape all god pages\n\n"
+                "_Classic names (`!up`, `!gods`, `!god-list`…) still work._"
+            )
+        )
+        await ctx.send(embed=embed)
+
+    async def _god_redispatch(self, ctx, target_name: str, rest: str = ""):
+        """Re-run the classic command so its auth + arg parsing apply unchanged."""
+        ctx.message.content = f"{ctx.prefix}{target_name} {rest}".rstrip()
+        await self.bot.process_commands(ctx.message)
+
+    @god.command(name="up", aliases=["spawned", "list-up"])
+    async def god_up_sub(self, ctx, *, rest: str = ""):
+        """Spawned gods with timers. Same as !up."""
+        await self._god_redispatch(ctx, "up", rest)
+
+    @god.command(name="info", aliases=["show"])
+    async def god_info_sub(self, ctx, *, rest: str = ""):
+        """Full details for one god. Same as classic !god <name>."""
+        await self._god_redispatch(ctx, "god-info-classic", rest)
+
+    @god.command(name="list", aliases=["ref", "reference"])
+    async def god_list_sub(self, ctx, *, rest: str = ""):
+        """Full god reference table. Same as !god-list."""
+        await self._god_redispatch(ctx, "god-list", rest)
+
+    @god.command(name="export")
+    async def god_export_sub(self, ctx, *, rest: str = ""):
+        """Export live recs to a .txt. Same as !god-export."""
+        await self._god_redispatch(ctx, "god-export", rest)
+
+    @god.command(name="set")
+    async def god_set_sub(self, ctx, *, rest: str = ""):
+        """Edit a god's data (admin). Same as !god-set."""
+        await self._god_redispatch(ctx, "god-set", rest)
+
+    @god.command(name="import", aliases=["rec-import"])
+    async def god_import_sub(self, ctx, *, rest: str = ""):
+        """Bulk-set recs from a stats block (admin). Same as !god-rec-import."""
+        await self._god_redispatch(ctx, "god-rec-import", rest)
+
+    @god.command(name="update", aliases=["refresh", "rescan"])
+    async def god_update_sub(self, ctx, *, rest: str = ""):
+        """Rescrape all god pages (admin). Same as !primeupdate."""
+        await self._god_redispatch(ctx, "primeupdate", rest)
+
     @commands.command(name="gods")
     async def list_gods(self, ctx):
         """Show currently spawned Prime Gods."""
@@ -423,9 +491,9 @@ class RaidCommands(commands.Cog):
     # !god <name>
     # ------------------------------------------------------------------
 
-    @commands.command(name="god")
+    @commands.command(name="god-info-classic", hidden=True)
     async def god_info(self, ctx, *, name: str):
-        """Show full details for a specific Prime God."""
+        """Show full details for a specific Prime God. (Internal target for !god info.)"""
         from outwar.table_image import render_table, TEXT_GREEN, TEXT_RED, TEXT_GOLD, TEXT_WHITE, TEXT_DIM, TEXT_BLUE
         god = db.get_prime_god(name)
         if not god:
