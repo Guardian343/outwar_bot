@@ -92,7 +92,7 @@ async def main():
         "cogs.primewatcher",
         "cogs.misc_commands",
         "cogs.backpack_commands",
-        "cogs.crew_history_commands",
+        "cogs.ssid_commands",
         "cogs.utility_commands",
         "cogs.crawler_commands",
         "cogs.help_commands",
