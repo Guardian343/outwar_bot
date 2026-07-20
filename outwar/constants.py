@@ -69,15 +69,15 @@ class Skill:
 # ---------------------------------------------------------------------------
 
 CLASS_SKILLS = [
+    # On Guard and Street Smarts deliberately excluded — the !guard-start loop
+    # keeps those two permanently recast on their own cooldown timers. Masterful
+    # Ferocity/Affliction excluded too (DC/PvP skills, no raid use). Masterful
+    # Preservation is kept here as it's wanted on class casts.
     Skill.EMPOWER,
     Skill.STEALTH,
-    Skill.ON_GUARD,
     Skill.VITAMIN_X,
     Skill.FORTIFY,
-    Skill.STREET_SMARTS,
-    Skill.MASTERFUL_FEROCITY,
     Skill.MASTERFUL_PRESERVATION,
-    Skill.MASTERFUL_AFFLICTION,
 ]
 
 FEROCITY_SKILLS = [
@@ -92,13 +92,15 @@ FEROCITY_SKILLS = [
     Skill.BLOODLUST,
     Skill.STONE_SKIN,
     Skill.LOYAL_FEROCITY,
+    Skill.MASTERFUL_FEROCITY,
 ]
 
 PRESERVATION_SKILLS = [
+    # Markdown and Strength in Numbers intentionally NOT here — MD is a boss-raid
+    # skill (cast via the raid path, never on prime groups) and SiN rotates
+    # separately. Masterful Preservation is included (moved in from class).
     Skill.MASTERFUL_RAIDING,
-    Skill.MARKDOWN,
     Skill.LAST_STAND,
-    Skill.STRENGTH_IN_NUMBERS,
     Skill.FORCEFIELD,
     Skill.BLESSING_FROM_ABOVE,
     Skill.ENCHANT_ARMOR,
@@ -106,6 +108,7 @@ PRESERVATION_SKILLS = [
     Skill.EXECUTIONER,
     Skill.ELEMENTAL_BARRIER,
     Skill.LOYAL_PRESERVATION,
+    Skill.MASTERFUL_PRESERVATION,
 ]
 
 AFFLICTION_SKILLS = [
@@ -120,6 +123,14 @@ AFFLICTION_SKILLS = [
     Skill.VANISH,
     Skill.TIME_WARP,
     Skill.LOYAL_AFFLICTION,
+    Skill.MASTERFUL_AFFLICTION,
+]
+
+# Misc quick set — the boss-specific damage skills, for !cast misc.
+MISC_SKILLS = [
+    Skill.SHIELD_WALL,
+    Skill.GOD_SLAYER,
+    Skill.TRIWORLD_INFLUENCE,
 ]
 
 SKILL_NAMES = {

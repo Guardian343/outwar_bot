@@ -47,8 +47,55 @@ class AdminCommands(commands.Cog):
         return self.bot.outwar
 
     # ------------------------------------------------------------------
-    # !guard-start / !guard-stop — keep On Guard + Street Smarts active
+    # !trustee group — unifies scan/update/check/remove/clear. The classic
+    # commands live across two cogs, so subcommands redispatch through the
+    # bot's router (rewrite message → process_commands), which keeps each
+    # classic command's own auth + logic intact regardless of which cog it's in.
     # ------------------------------------------------------------------
+
+    @commands.group(name="trustee", aliases=["trustees"], invoke_without_command=True)
+    async def trustee(self, ctx):
+        """Trustee hub. Use !trustee <action> — scan / update / check / remove / clear."""
+        await ctx.send(embed=es.info_embed(
+            "👥 Trustee Commands",
+            description=(
+                "`!trustee scan` — scan all crews for trustee access\n"
+                "`!trustee update` — refresh trustee levels/rage\n"
+                "`!trustee check` — check which trustees are reachable\n"
+                "`!trustee remove [crew]` — remove trustees (optionally one crew)\n"
+                "`!trustee clear` — clear the whole trustee database\n\n"
+                "_Classic names (`!scan-trustees`, `!update-trustees`…) still work._"
+            )))
+
+    async def _trustee_redispatch(self, ctx, target: str, rest: str = ""):
+        ctx.message.content = f"{ctx.prefix}{target} {rest}".rstrip()
+        await self.bot.process_commands(ctx.message)
+
+    @trustee.command(name="scan")
+    async def trustee_scan(self, ctx):
+        """Scan all crews for trustee access. Same as !scan-trustees."""
+        await self._trustee_redispatch(ctx, "scan-trustees")
+
+    @trustee.command(name="update")
+    async def trustee_update(self, ctx):
+        """Refresh trustee levels/rage. Same as !update-trustees."""
+        await self._trustee_redispatch(ctx, "update-trustees")
+
+    @trustee.command(name="check")
+    async def trustee_check(self, ctx):
+        """Check which trustees are reachable. Same as !check-trustees."""
+        await self._trustee_redispatch(ctx, "check-trustees")
+
+    @trustee.command(name="remove")
+    async def trustee_remove(self, ctx, *, crew_name: str = ""):
+        """Remove trustees (optionally one crew). Same as !remove-trustees."""
+        await self._trustee_redispatch(ctx, "remove-trustees", crew_name)
+
+    @trustee.command(name="clear")
+    async def trustee_clear(self, ctx):
+        """Clear the whole trustee database. Same as !clear-trustees."""
+        await self._trustee_redispatch(ctx, "clear-trustees")
+
 
     @commands.command(name="guard-start")
     async def guard_start(self, ctx):
@@ -1026,6 +1073,44 @@ class OptimumCommands(commands.Cog):
             f"**Add accounts:** {add_names}\n"
             f"Total PWR: **{add_pwr:,}** · Total ELE: **{add_ele:,}** · Total CHAOS: **{add_chaos:,}**"
         )
+
+    @commands.group(name="crew", invoke_without_command=True)
+    async def crew(self, ctx):
+        """Crew hub. Use !crew <action> — lock / unlock / locked / scores.
+        (For adding/editing crews see !crews.)"""
+        await ctx.send(embed=es.info_embed(
+            "🏰 Crew Commands",
+            description=(
+                "`!crew lock <crew_id>` — lock a crew from raids\n"
+                "`!crew unlock <crew_id>` — unlock it\n"
+                "`!crew locked` — list locked crews\n"
+                "`!crew scores [crew]` — crew score rankings\n\n"
+                "_Add/edit crews with `!crews`. Classic names (`!crew-lock`…) still work._"
+            )))
+
+    async def _crew_redispatch(self, ctx, target, rest=""):
+        ctx.message.content = f"{ctx.prefix}{target} {rest}".rstrip()
+        await self.bot.process_commands(ctx.message)
+
+    @crew.command(name="lock")
+    async def crew_lock_sub(self, ctx, crew_id: int):
+        """Lock a crew. Same as !crew-lock."""
+        await self._crew_redispatch(ctx, "crew-lock", str(crew_id))
+
+    @crew.command(name="unlock")
+    async def crew_unlock_sub(self, ctx, crew_id: int):
+        """Unlock a crew. Same as !crew-unlock."""
+        await self._crew_redispatch(ctx, "crew-unlock", str(crew_id))
+
+    @crew.command(name="locked")
+    async def crew_locked_sub(self, ctx):
+        """List locked crews. Same as !crews-locked."""
+        await self._crew_redispatch(ctx, "crews-locked")
+
+    @crew.command(name="scores")
+    async def crew_scores_sub(self, ctx, *, arg: str = ""):
+        """Crew score rankings. Same as !scores."""
+        await self._crew_redispatch(ctx, "scores", arg)
 
     @commands.command(name="crews-locked", aliases=["locked-crews", "crewlocked"])
     async def crews_locked(self, ctx):

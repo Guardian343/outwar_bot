@@ -1083,6 +1083,43 @@ class GodMonitor(commands.Cog):
             embed.add_field(name=alert_type.title(), value=value, inline=False)
         await ctx.send(embed=embed)
 
+    @commands.group(name="envoy", invoke_without_command=True)
+    async def envoy(self, ctx):
+        """Envoy hub. Use !envoy <action> — list / pool / fetch / shop."""
+        await ctx.send(embed=es.info_embed(
+            f"{es.ICON_ENVOY} Envoy Commands",
+            description=(
+                "`!envoy list` — current envoy spawn status\n"
+                "`!envoy shop` — the Envoy Quartermaster shop\n"
+                "`!envoy pool [n]` — view or set the loot pool number (admin)\n"
+                "`!envoy fetch [pool]` — fetch drops for all 8 envoys (admin)\n\n"
+                "_Classic names (`!envoys`, `!envoy-pool`…) still work._"
+            )))
+
+    async def _envoy_redispatch(self, ctx, target, rest=""):
+        ctx.message.content = f"{ctx.prefix}{target} {rest}".rstrip()
+        await self.bot.process_commands(ctx.message)
+
+    @envoy.command(name="list", aliases=["status"])
+    async def envoy_list_sub(self, ctx):
+        """Envoy spawn status. Same as !envoys."""
+        await self._envoy_redispatch(ctx, "envoys")
+
+    @envoy.command(name="pool")
+    async def envoy_pool_sub(self, ctx, number: int = None):
+        """View/set the loot pool. Same as !envoy-pool."""
+        await self._envoy_redispatch(ctx, "envoy-pool", str(number) if number is not None else "")
+
+    @envoy.command(name="fetch")
+    async def envoy_fetch_sub(self, ctx, pool: int = None):
+        """Fetch drops for all 8 envoys. Same as !envoy-fetch."""
+        await self._envoy_redispatch(ctx, "envoy-fetch", str(pool) if pool is not None else "")
+
+    @envoy.command(name="shop")
+    async def envoy_shop_sub(self, ctx):
+        """The Envoy Quartermaster shop. Same as !envoy-shop."""
+        await self._envoy_redispatch(ctx, "envoy-shop")
+
     @commands.command(name="envoys")
     async def envoy_status(self, ctx):
         """Show current envoy spawn status."""
@@ -1387,9 +1424,22 @@ class GodMonitor(commands.Cog):
         )
 
         await ctx.send(embed=embed)
-    @commands.command(name="summary-now")
+    @commands.group(name="summary", invoke_without_command=True)
+    async def summary(self, ctx):
+        """Daily summary hub. Use !summary <action> — e.g. !summary set lod."""
+        # Bare !summary shows the current crew list (the most useful default).
+        crews = db.get_summary_crews()
+        if not crews:
+            await ctx.send("No summary crews set. Add one with `!summary set <crew>`.\n"
+                           "_Then `!summary now` to post, `!summary list` to review._")
+        else:
+            await ctx.send("**Daily summary crews:**\n"
+                           + "\n".join(f"• {c}" for c in crews)
+                           + "\n\n_`!summary set/remove <crew>` to change · `!summary now` to post._")
+
+    @summary.command(name="now")
     async def summary_now(self, ctx):
-        """Manually trigger the daily summary right now."""
+        """Manually trigger the daily summary right now. Same as !summary-now."""
         channel_id = db.get_alert_channel("summary")
         if not channel_id:
             await ctx.send("\u274c No summary channel set. Use `!set-alert-channel summary #channel`")
@@ -1400,7 +1450,7 @@ class GodMonitor(commands.Cog):
             return
         summary_crews = db.get_summary_crews()
         if not summary_crews:
-            await ctx.send("\u274c No crews set. Use `!summary-set <crew>` first.")
+            await ctx.send("\u274c No crews set. Use `!summary set <crew>` first.")
             return
         await ctx.send(f"\u2705 Generating summary for **{', '.join(summary_crews)}**")
         try:
@@ -1409,9 +1459,9 @@ class GodMonitor(commands.Cog):
             await ctx.send(f"\u274c Error: `{e}`")
             logger.warning("GOD_MONITOR", f"summary-now error: {e}")
 
-    @commands.command(name="summary-set")
+    @summary.command(name="set", aliases=["add"])
     async def summary_set(self, ctx, *, crew_name: str):
-        """Add a crew to the daily summary. Usage: !summary-set <crew>"""
+        """Add a crew to the daily summary. Same as !summary-set."""
         crew = db.get_crew(crew_name)
         full_name = crew["full_name"] if crew else crew_name
         if db.add_summary_crew(full_name):
@@ -1419,9 +1469,9 @@ class GodMonitor(commands.Cog):
         else:
             await ctx.send(f"**{full_name}** is already in the summary.")
 
-    @commands.command(name="summary-remove")
+    @summary.command(name="remove", aliases=["del", "delete"])
     async def summary_remove(self, ctx, *, crew_name: str):
-        """Remove a crew from the daily summary. Usage: !summary-remove <crew>"""
+        """Remove a crew from the daily summary. Same as !summary-remove."""
         crew = db.get_crew(crew_name)
         full_name = crew["full_name"] if crew else crew_name
         if db.remove_summary_crew(full_name):
@@ -1429,14 +1479,31 @@ class GodMonitor(commands.Cog):
         else:
             await ctx.send(f"**{full_name}** wasn't in the summary.")
 
-    @commands.command(name="summary-list")
+    @summary.command(name="list")
     async def summary_list(self, ctx):
-        """Show crews included in the daily summary."""
+        """Show crews included in the daily summary. Same as !summary-list."""
         crews = db.get_summary_crews()
         if not crews:
-            await ctx.send("No crews set. Use `!summary-set <crew>` to add one.")
+            await ctx.send("No crews set. Use `!summary set <crew>` to add one.")
         else:
             await ctx.send("**Daily summary crews:**\n" + "\n".join(f"• {c}" for c in crews))
+
+    # Classic hyphenated names kept working in the background as hidden aliases.
+    @commands.command(name="summary-now", hidden=True)
+    async def summary_now_classic(self, ctx):
+        await self.summary_now.callback(self, ctx)
+
+    @commands.command(name="summary-set", hidden=True)
+    async def summary_set_classic(self, ctx, *, crew_name: str):
+        await self.summary_set.callback(self, ctx, crew_name=crew_name)
+
+    @commands.command(name="summary-remove", hidden=True)
+    async def summary_remove_classic(self, ctx, *, crew_name: str):
+        await self.summary_remove.callback(self, ctx, crew_name=crew_name)
+
+    @commands.command(name="summary-list", hidden=True)
+    async def summary_list_classic(self, ctx):
+        await self.summary_list.callback(self, ctx)
 
     @commands.command(name="focusdrops")
     async def focusdrops_add(self, ctx, *, crew_name: str):

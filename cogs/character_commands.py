@@ -11,7 +11,7 @@ from outwar.scraper import (
 )
 from outwar.constants import (
     Skill, SKILL_NAMES, POTIONS, BOSS_POTS, DRINK_ALL_ORDER,
-    PRESERVATION_SKILLS, FEROCITY_SKILLS, AFFLICTION_SKILLS, CLASS_SKILLS,
+    PRESERVATION_SKILLS, FEROCITY_SKILLS, AFFLICTION_SKILLS, CLASS_SKILLS, MISC_SKILLS,
     resolve_skill
 )
 from outwar import logger
@@ -158,13 +158,32 @@ class CharacterCommands(commands.Cog):
         raid_skills = BOSS_SKILLS_CLASS + [s for s in BOSS_SKILLS_PRES if s not in ROTATING_SKILLS] + BOSS_SKILLS_MISC
         await self._cast_skill_group(ctx, target, raid_skills, "Raid Skills")
 
-    @commands.command(name="cast")
-    async def cast(self, ctx, skill_name: str, *, target: str):
+    @commands.group(name="cast", invoke_without_command=True)
+    async def cast(self, ctx, skill_name: str = None, *, target: str = None):
         """
-        Cast any skill on a crew, group, or single character.
-        Usage: !cast <skill> <target>
-        Run !skills to see all skill aliases.
+        Cast skills on a crew, group, or single character.
+
+          !cast <skill> <target>   — cast any named skill (run !skills for aliases)
+          !cast ss <target>        — Street Smarts     · !cast pres <target>  — Preservation
+          !cast fero <target>      — Ferocity          · !cast afflic <target> — Affliction
+          !cast class <target>     — all class skills  · !cast raid <target>   — raid skill set
+          !cast all <target>       — everything
+
+        Shortcut subcommands win if the first word matches one; otherwise the
+        first word is treated as a skill name and cast directly.
         """
+        if skill_name is None:
+            await ctx.send("Usage: `!cast <skill> <target>` — run `!skills` for skill "
+                           "names, or use a shortcut like `!cast ss <group>`.")
+            return
+        if target is None:
+            await ctx.send(f"Who should I cast **{skill_name}** on? "
+                           f"Usage: `!cast {skill_name} <target>`")
+            return
+        await self._cast_named_skill(ctx, skill_name, target)
+
+    async def _cast_named_skill(self, ctx, skill_name: str, target: str):
+        """Cast a single named skill on a target (the generic !cast logic)."""
         skill_id, skill_label = resolve_skill(skill_name)
 
         if skill_id is None:
@@ -216,64 +235,47 @@ class CharacterCommands(commands.Cog):
         )
         await ctx.send(embed=embed)
 
-    @commands.command(name="cast-all")
-    async def cast_all(self, ctx, *, target: str):
-        """Cast Empower, Stealth, VitaminX, Fortify on a crew, group, or single trustee."""
-        trustees = self._resolve_target(target)
-        if not trustees:
-            await ctx.send(f"⚠️ No accounts found for `{target}` — not a known crew, group, or character name.")
-            return
+    # --- cast group shortcut subcommands (mirror the classic cast-* commands) ---
+    # These call the same helpers as !cast-ss / !cast-pres / etc., so behaviour is
+    # identical — just reachable as !cast ss / !cast pres. The classic hyphenated
+    # names still work in the background.
 
-        skills = [Skill.EMPOWER, Skill.STEALTH, Skill.VITAMIN_X, Skill.FORTIFY]
-        sem    = asyncio.Semaphore(10)
-        succeeded = []
-        failed    = []
+    @cast.command(name="ss")
+    async def cast_ss_sub(self, ctx, *, group: str):
+        """Cast Street Smarts. Same as !cast-ss."""
+        await self._cast_skill_for_group(ctx, group, Skill.STREET_SMARTS)
 
-        async def _cast_one(t):
-            suid = t.get("suid") or _extract_suid(t.get("url", ""))
-            if not suid:
-                failed.append(t["name"])
-                return
-            async with sem:
-                try:
-                    any_success = False
-                    for skill_id in skills:
-                        resp = await self.session.post_as("cast_skills.php", {
-                            "castskillid": str(skill_id),
-                            "cast": "Cast Skill"
-                        }, suid)
-                        if "You just cast" in resp:
-                            any_success = True
-                        await asyncio.sleep(0.05)
-                    if any_success:
-                        succeeded.append(t["name"])
-                    else:
-                        failed.append(t["name"])
-                except Exception:
-                    failed.append(t["name"])
-                finally:
-                    self.session._session.cookie_jar.update_cookies(
-                        {"ow_userid": str(self.session.user_id)}, response_url=SIGIL_URL
-                    )
+    @cast.command(name="pres")
+    async def cast_pres_sub(self, ctx, *, target: str):
+        """Cast Preservation skills. Same as !cast-pres."""
+        await self._cast_skill_group(ctx, target, PRESERVATION_SKILLS, "Preservation")
 
-        # Single character — keep it simple, no progress message needed
-        if len(trustees) == 1:
-            await _cast_one(trustees[0])
-            name = trustees[0]["name"]
-            if name in succeeded:
-                await ctx.send(f"✅ Skills cast on **{name}**!")
-            else:
-                await ctx.send(f"⚠️ Failed to cast skills on **{name}**.")
-            return
+    @cast.command(name="fero")
+    async def cast_fero_sub(self, ctx, *, target: str):
+        """Cast Ferocity skills. Same as !cast-fero."""
+        await self._cast_skill_group(ctx, target, FEROCITY_SKILLS, "Ferocity")
 
-        # Crew/group — show progress for larger batches
-        msg = await ctx.send(f"Casting class skills on **{len(trustees)}** accounts...")
-        await asyncio.gather(*[_cast_one(t) for t in trustees])
-        await msg.delete()
-        await ctx.send(
-            f"✅ Class skills cast on **{len(succeeded)}/{len(trustees)}** accounts"
-            + (f" — ⚠️ failed: {', '.join(failed[:15])}" + ("..." if len(failed) > 15 else "") if failed else "")
-        )
+    @cast.command(name="afflic")
+    async def cast_afflic_sub(self, ctx, *, target: str):
+        """Cast Affliction skills. Same as !cast-afflic."""
+        await self._cast_skill_group(ctx, target, AFFLICTION_SKILLS, "Affliction")
+
+    @cast.command(name="class")
+    async def cast_class_sub(self, ctx, *, target: str):
+        """Cast all Class skills. Same as !cast-class."""
+        await self._cast_skill_group(ctx, target, CLASS_SKILLS, "Class")
+
+    @cast.command(name="raid")
+    async def cast_raid_sub(self, ctx, *, target: str):
+        """Cast the boss raid skill set. Same as !cast-raid."""
+        from cogs.boss_raid_commands import BOSS_SKILLS_CLASS, BOSS_SKILLS_PRES, BOSS_SKILLS_MISC, ROTATING_SKILLS
+        raid_skills = BOSS_SKILLS_CLASS + [s for s in BOSS_SKILLS_PRES if s not in ROTATING_SKILLS] + BOSS_SKILLS_MISC
+        await self._cast_skill_group(ctx, target, raid_skills, "Raid Skills")
+
+    @cast.command(name="misc")
+    async def cast_misc_sub(self, ctx, *, target: str):
+        """Cast the boss-specific damage skills (Shield Wall, God Slayer, Triworld Influence)."""
+        await self._cast_skill_group(ctx, target, MISC_SKILLS, "Misc")
 
     @commands.command(name="skills")
     async def skills_list(self, ctx):

@@ -37,8 +37,10 @@ OWNER_COMMANDS = {
     "auth", "unauth", "auth-list",
     "set-alert-channel", "alerting",
     "summary-set", "summary-remove", "summary-list", "summary-now",
+    # summary group subcommands — gate by qualified name so members are blocked
+    # at the group (matching the classic summary-* commands, which were owner).
+    "summary", "summary set", "summary remove", "summary list", "summary now",
     "focusdrops", "unfocusdrops", "focuslist",
-    "scan-trustees", "update-trustees", "remove-trustees", "clear-trustees",
     "autorank", "optimise", "optimise-all", "optimize-all", "optimiseall",
     "standings", "rankings",
     "scan-keys", "scankeys", "scan-teleporters",
@@ -48,6 +50,9 @@ OWNER_COMMANDS = {
     "exclude", "include", "unexclude", "excluded",
     "slayer-list", "slayerlist", "slayer-needs", "slayerneeds",
     "slayer", "slayer-stop", "slayerstop",
+    # crew + slayer group subcommands (owner, matching classic).
+    "crew", "crew lock", "crew unlock", "crew locked", "crew scores",
+    "slayer list", "slayer needs", "slayer stop", "slayer-run",
     "session-set", "session-get",
     "restart",
 }
@@ -61,9 +66,15 @@ ADMIN_COMMANDS = {
     "god set", "god import", "god update",
     # Read-only inspection kept restricted (Liam's ruling: admin).
     "check-trustees", "check-item",
+    # Trustee management — all admin (they edit the trustee DB, not personal
+    # raiding). Both classic names and the new !trustee group subcommands.
+    "scan-trustees", "update-trustees", "remove-trustees", "clear-trustees",
+    "trustee", "trustee scan", "trustee update", "trustee check",
+    "trustee remove", "trustee clear",
     # Account / crew / config altering — stay admin+.
     "crawl", "crawl-stop", "giveaway", "envoy-drops",
     "alert-channels", "guard-start", "guard-stop", "envoy-pool", "envoy-fetch",
+    "envoy pool", "envoy fetch",
     # !bp scan — writes the item archive and hits the site, so admin+.
     "scan",
     # !rare add/remove edits the highlighted-drops config.
@@ -79,6 +90,7 @@ MEMBER_COMMANDS = {
     "gods", "up", "god", "god-list", "god-export", "beatable", "can-beat", "canbeat", "prime-stats", "prime-drops",
     "bosslist", "boss-status", "boss-records", "boss",
     "envoy-shop", "cast-raid",
+    "envoy", "envoy list", "envoy shop",
     "check-md",
     "commands", "todo", "complete",
     "alias", "aliases", "crews", "groups",

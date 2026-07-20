@@ -2400,6 +2400,50 @@ class RaidCommands(commands.Cog):
     # God Slayer — verification commands (data only; raiding comes next)
     # ------------------------------------------------------------------
 
+    @commands.group(name="slayer", invoke_without_command=True)
+    async def slayer_group(self, ctx, crew: str = None, mode: str = None):
+        """
+        God-Slayer hub. Bare !slayer <crew> [needed|all] runs the raid;
+        subcommands manage it:
+          !slayer <crew> [needed|all] — raid the daily slayer gods
+          !slayer list                — show today's targets + rooms
+          !slayer needs <char>        — what an account still needs
+          !slayer stop                — stop after the current god
+        """
+        # No args → show the hub. Args → run the raid (redispatch to slayer-run).
+        if crew is None:
+            await ctx.send(embed=es.info_embed(
+                "🗡️ God-Slayer",
+                description=(
+                    "`!slayer <crew> [needed|all]` — raid the daily slayer gods\n"
+                    "`!slayer list` — today's targets and rooms\n"
+                    "`!slayer needs <char>` — what one account still needs\n"
+                    "`!slayer stop` — stop after the current god\n\n"
+                    "_Classic names (`!slayer-list`, `!slayerstop`…) still work._")))
+            return
+        rest = crew + (f" {mode}" if mode else "")
+        ctx.message.content = f"{ctx.prefix}slayer-run {rest}"
+        await self.bot.process_commands(ctx.message)
+
+    async def _slayer_redispatch(self, ctx, target, rest=""):
+        ctx.message.content = f"{ctx.prefix}{target} {rest}".rstrip()
+        await self.bot.process_commands(ctx.message)
+
+    @slayer_group.command(name="list")
+    async def slayer_list_sub(self, ctx):
+        """Today's slayer targets. Same as !slayer-list."""
+        await self._slayer_redispatch(ctx, "slayer-list")
+
+    @slayer_group.command(name="needs")
+    async def slayer_needs_sub(self, ctx, character: str):
+        """What an account still needs. Same as !slayer-needs."""
+        await self._slayer_redispatch(ctx, "slayer-needs", character)
+
+    @slayer_group.command(name="stop")
+    async def slayer_stop_sub(self, ctx):
+        """Stop after the current god. Same as !slayer-stop."""
+        await self._slayer_redispatch(ctx, "slayer-stop")
+
     @commands.command(name="slayer-list", aliases=["slayerlist"])
     async def slayer_list(self, ctx):
         """Show the daily God-Slayer targets resolved to their rooms (from Mobs.txt)."""
@@ -2448,9 +2492,9 @@ class RaidCommands(commands.Cog):
         self._slayer_stop = True
         await ctx.send("🛑 Slayer will stop after the current god.")
 
-    @commands.command(name="slayer")
+    @commands.command(name="slayer-run", hidden=True)
     async def slayer(self, ctx, crew: str = "LoD", mode: str = "needed"):
-        """Raid the daily God-Slayer gods for a crew. Needers join first, others backfill.
+        """Raid the daily God-Slayer gods for a crew. (Internal target for !slayer.)
         Usage: !slayer <crew> [needed|all]
           needed (default) → only raid gods at least one account still needs
           all              → raid all 56 targets (full clear for drops)"""
