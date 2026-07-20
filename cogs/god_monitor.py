@@ -54,7 +54,7 @@ def _aggregate_loot_display(entry: dict):
             # and mixing the two would muddy both signals.
             try:
                 if db.is_rare_item(name):
-                    label = f"**{label}**"
+                    label = f"🔥 **{label}**"
             except Exception:
                 pass
             others.append(label)
@@ -88,7 +88,7 @@ def _format_focus_drops(rec: dict) -> str:
             label = f"{name} x{count}" if count > 1 else name
             try:
                 if db.is_rare_item(name):
-                    label = f"**{label}**"
+                    label = f"🔥 **{label}**"
             except Exception:
                 pass
             parts.append(label)

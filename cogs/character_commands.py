@@ -236,15 +236,12 @@ class CharacterCommands(commands.Cog):
                 return
             async with sem:
                 try:
-                    self.session._session.cookie_jar.update_cookies(
-                        {"ow_userid": str(suid)}, response_url=SIGIL_URL
-                    )
                     any_success = False
                     for skill_id in skills:
-                        resp = await self.session.post("cast_skills.php", {
+                        resp = await self.session.post_as("cast_skills.php", {
                             "castskillid": str(skill_id),
                             "cast": "Cast Skill"
-                        })
+                        }, suid)
                         if "You just cast" in resp:
                             any_success = True
                         await asyncio.sleep(0.05)
@@ -624,20 +621,22 @@ class CharacterCommands(commands.Cog):
             cast_count = 0
             skip_count = 0
             try:
-                self._switch_to(suid)
                 for skill_id in skill_ids:
-                    resp = await self.session.post("cast_skills.php", {
+                    # post_as passes ow_userid per-request, so concurrent casts
+                    # across characters don't stomp on a shared session identity.
+                    # (The old _switch_to mutated a shared cookie jar, which raced
+                    # under asyncio.gather — characters cast as the wrong account
+                    # or got wrongly counted as "skipped".)
+                    resp = await self.session.post_as("cast_skills.php", {
                         "castskillid": str(skill_id),
                         "cast": "Cast Skill"
-                    })
+                    }, suid)
                     if "You just cast" in resp:
                         cast_count += 1
                     else:
                         skip_count += 1
             except Exception as e:
                 logger.warning("GUARD", f"Cast group error for {t['name']}: {e}")
-            finally:
-                self._switch_to_bot()
             results[t["name"]] = {"cast": cast_count, "skipped": skip_count}
 
         await asyncio.gather(*[_cast_group(t) for t in trustees])
@@ -672,17 +671,14 @@ class CharacterCommands(commands.Cog):
             nonlocal success
             try:
                 suid = t.get("suid") or _extract_suid(t.get("url", ""))
-                self._switch_to(suid)
-                resp = await self.session.post("cast_skills.php", {
+                resp = await self.session.post_as("cast_skills.php", {
                     "castskillid": str(skill_id),
                     "cast": "Cast Skill"
-                })
+                }, suid)
                 if "You just cast" in resp:
                     success += 1
             except Exception as e:
                 logger.warning("GUARD", f"Failed to cast '{skill_name}' for {t['name']}: {e}")
-            finally:
-                self._switch_to_bot()
 
         await asyncio.gather(*[_cast(t) for t in trustees])
         await ctx.send(f"**{skill_name}** cast on {success}/{len(trustees)} characters.")
@@ -710,8 +706,7 @@ class CharacterCommands(commands.Cog):
                 return
             async with sem:
                 try:
-                    self._switch_to(suid)
-                    html = await self.session.get("ajax/backpackcontents.php?tab=potion")
+                    html = await self.session.get_as("ajax/backpackcontents.php?tab=potion", suid)
                     items = parse_backpack_for_item(html, potion_name)
                     # For Remnant Solice, always use highest level available
                     if items and "remnant solice" in potion_name.lower():
@@ -722,10 +717,10 @@ class CharacterCommands(commands.Cog):
                         items = sorted(items, key=_rem_level, reverse=True)
                     if items:
                         item = items[0]
-                        resp = await self.session.post("ajax/backpack_action.php", {
+                        resp = await self.session.post_as("ajax/backpack_action.php", {
                             "action":    "activate",
                             "itemids[]": item["item_id"],
-                        })
+                        }, suid)
                         resp_str = str(resp)
                         if "invalid item for action" in resp_str.lower():
                             # Most likely already active — the item exists in the
@@ -742,8 +737,6 @@ class CharacterCommands(commands.Cog):
                         missing.append(t["name"])
                 except Exception as e:
                     errors.append(f"{t['name']}: {e}")
-                finally:
-                    self._switch_to_bot()
 
         await asyncio.gather(*[_use_potion(t) for t in trustees])
 

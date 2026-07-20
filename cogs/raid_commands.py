@@ -1127,6 +1127,19 @@ class RaidCommands(commands.Cog):
         start_time = datetime.now()
         cached_caps: dict[str, bool] = {}  # name -> is_capped, persists across attempts
 
+        # A single embed we EDIT each attempt, growing one line per raid:
+        #   Raid 1 — 23%
+        #   Raid 2 — Win
+        # No per-attempt messages (which flooded the channel), no summary box.
+        raid_lines = []
+
+        def _build_embed():
+            desc = "\n".join(raid_lines) if raid_lines else "_starting…_"
+            e = es.info_embed(f"⚔️ {god['name']} — {wins} win(s) target", description=desc)
+            return e
+
+        status_msg = await ctx.send(embed=_build_embed())
+
         for attempt in range(1, tries + 1):
             # Only check spawn every 5 attempts to avoid extra fetches
             if attempt == 1 or attempt % 5 == 0:
@@ -1134,7 +1147,11 @@ class RaidCommands(commands.Cog):
                 live_gods = parse_gods(html)
                 live_god = next((g for g in live_gods if g.god_id == god.get("god_id")), None)
                 if not live_god or not live_god.spawned:
-                    await ctx.send(f"**{god['name']}** is no longer spawned. Stopping after {total_attempts} attempts.")
+                    raid_lines.append(f"_{god['name']} no longer spawned — stopped._")
+                    try:
+                        await status_msg.edit(embed=_build_embed())
+                    except Exception:
+                        pass
                     break
 
             total_attempts += 1
@@ -1144,42 +1161,36 @@ class RaidCommands(commands.Cog):
 
             if won:
                 total_wins += 1
-                msg = f"🏆 **Win {total_wins}/{wins}** on attempt {attempt}!"
-                if damage:
-                    msg += f" Damage: {damage:,}"
-                if note:
-                    msg += f"\n_{note}_"
-                await ctx.send(msg)
-                if total_wins >= wins:
-                    await ctx.send(f"✅ Reached **{wins}** win(s). Stopping.")
-                    break
+                raid_lines.append(f"**Raid {attempt} — Win** 🏆")
             else:
-                msg = f"Attempt {attempt}/{tries} — no win."
-                if damage:
-                    msg += f" Damage: {damage:,}"
+                # Pull the HP% the god was left at, for the running list.
+                hp_txt = "no win"
                 if note:
-                    msg += f"\n_{note}_"
-                await ctx.send(msg)
+                    _m = re.search(r"~?([\d.]+)\s*%\s*HP", note)
+                    if _m:
+                        hp_txt = f"{float(_m.group(1)):.0f}%"
+                raid_lines.append(f"Raid {attempt} — {hp_txt}")
+
+            try:
+                await status_msg.edit(embed=_build_embed())
+            except Exception:
+                pass
+
+            if won and total_wins >= wins:
+                break
 
             if attempt < tries:
                 await asyncio.sleep(3)
 
-        elapsed    = (datetime.now() - start_time).seconds
-        win_rate   = f"{(total_wins/total_attempts*100):.0f}%" if total_attempts > 0 else "0%"
-        mins, secs = divmod(elapsed, 60)
-        elapsed_str = f"{mins}m {secs}s" if mins else f"{secs}s"
-
-        from outwar.table_image import render_raid_summary
-        buf = render_raid_summary(god["name"], {
-            "group":        group,
-            "attempts":     total_attempts,
-            "wins":         total_wins,
-            "win_rate":     win_rate,
-            "total_damage": total_damage,
-            "elapsed":      elapsed_str,
-            "target_wins":  wins,
-        })
-        await ctx.send(file=discord.File(buf, filename="raid_summary.png"))
+        # Final tidy: reflect the finished state in the same embed (title shows
+        # the result), no separate summary image.
+        try:
+            final = es.info_embed(
+                f"⚔️ {god['name']} — {total_wins}/{wins} win(s) in {total_attempts} raids",
+                description="\n".join(raid_lines) if raid_lines else "_no raids run_")
+            await status_msg.edit(embed=final)
+        except Exception:
+            pass
 
     @commands.command(name="rq")
     async def raid_queue(self, ctx, group: str, tries: int, wins: int, *, gods_str: str):
