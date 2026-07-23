@@ -332,6 +332,12 @@ class GodMonitor(commands.Cog):
     # ------------------------------------------------------------------
 
     async def _process_god_changes(self, gods: list[God]):
+        # Same guard as envoys: an empty parse is a page failure, not a real
+        # state. Wiping the baseline would lose the next spawn/death transition.
+        if not gods:
+            logger.warning("GOD_MONITOR", "God parse returned nothing — keeping previous state")
+            return
+
         channel = await self._get_alert_channel("gods")
         new_state = {}
         just_spawned = []
@@ -394,6 +400,15 @@ class GodMonitor(commands.Cog):
         db.save_god_state(new_state)
 
     async def _process_envoy_changes(self, envoys):
+        # A failed or partial page parse yields no envoys. The roster is fixed
+        # (8 envoys always exist), so an empty list is ALWAYS a parse failure,
+        # never a real state. Overwriting the baseline with {} would wipe it —
+        # and the next poll would then re-baseline to "already dead", silently
+        # losing the death transition and its drop fetch forever. Bail instead.
+        if not envoys:
+            logger.warning("GOD_MONITOR", "Envoy parse returned nothing — keeping previous state")
+            return
+
         channel = await self._get_alert_channel("envoys") or await self._get_alert_channel("gods")
         new_state = {}
 
@@ -425,6 +440,13 @@ class GodMonitor(commands.Cog):
         db.save_envoy_state(new_state)
 
     async def _process_boss_changes(self, bosses):
+        # Same guard as gods/envoys. Losing boss state matters most of all —
+        # a missed death means a missed killed_time, which skews the spawn
+        # window calculation until the next confirmed kill.
+        if not bosses:
+            logger.warning("GOD_MONITOR", "Boss parse returned nothing — keeping previous state")
+            return
+
         channel = await self._get_alert_channel("bosses")
         new_state = {}
         just_spawned = []
