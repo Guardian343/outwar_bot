@@ -537,8 +537,8 @@ class RaidCommands(commands.Cog):
 
     @commands.command(name="god-set")
     async def god_set(self, ctx, name: str, field: str, *, value: str):
-        """Update a field on a god. Fields: recommended, hp, short_name, rec_power, rec_ele, rec_chaos"""
-        valid_fields = ("recommended", "hp", "short_name", "rec_power", "rec_ele", "rec_chaos")
+        """Update a field on a god. Fields: recommended, hp, short_name, rec_power, rec_ele, rec_chaos, room"""
+        valid_fields = ("recommended", "hp", "short_name", "rec_power", "rec_ele", "rec_chaos", "room")
         field = field.lower()
         if field not in valid_fields:
             await ctx.send(f"Unknown field `{field}`. Valid: {', '.join(valid_fields)}")
@@ -550,7 +550,7 @@ class RaidCommands(commands.Cog):
             return
 
         try:
-            if field in ("recommended", "hp", "rec_power", "rec_ele", "rec_chaos"):
+            if field in ("recommended", "hp", "rec_power", "rec_ele", "rec_chaos", "room"):
                 value = int(value.replace(",", ""))
             updates = {field: value}
             if field == "recommended":
@@ -1326,6 +1326,45 @@ class RaidCommands(commands.Cog):
     # Helpers
     # ------------------------------------------------------------------
 
+    def _resolve_god_room(self, god: dict) -> int | None:
+        """Find a god's room from three sources, in priority order:
+          1. Manual override — the god's own `room` field (set via !god set room).
+             Wins over everything, for when you know a room the table/crawl don't.
+          2. Hardcoded GOD_ROOMS table — the known, stable rooms.
+          3. Crawl data — crawl_mobs.json, matched by god_id == crawl mob id.
+             Auto-picks up event primes once you've crawled their zone.
+        Returns the room id, or None if no source has it.
+        """
+        # 1. Manual override on the god record
+        manual = god.get("room")
+        if manual:
+            try:
+                return int(manual)
+            except (ValueError, TypeError):
+                pass
+
+        # 2. Hardcoded table (keyed by exact name)
+        room = GOD_ROOMS.get(god["name"])
+        if room:
+            return room
+
+        # 3. Crawl fallback — match the god's mob id (god_id) in crawl_mobs.json
+        god_id = god.get("god_id")
+        if god_id:
+            try:
+                import json, os
+                path = os.path.join(os.path.dirname(__file__), "..", "database", "crawl_mobs.json")
+                with open(path, "r", encoding="utf-8") as f:
+                    crawl = json.load(f)
+                entry = crawl.get(str(god_id))
+                if entry and entry.get("rooms"):
+                    # A mob can appear in several rooms; use the first discovered.
+                    return int(entry["rooms"][0])
+            except Exception as e:
+                logger.warning("RAID", f"Crawl room lookup failed for {god.get('name')}: {e}")
+
+        return None
+
     async def _do_god_raid(self, ctx, god: dict, trustees: list, cap_cache: dict = None, debug_log: list = None) -> tuple[bool, int, str]:
         """Form and launch a raid on a Prime God. Returns (won, damage, note)."""
         def dbg(m):
@@ -1344,7 +1383,7 @@ class RaidCommands(commands.Cog):
             return False, 0, None
 
         session = self.session
-        room_id = GOD_ROOMS.get(god["name"])
+        room_id = self._resolve_god_room(god)
 
         try:
             # Pre-flight cap check — use cache if available, only fetch uncached accounts

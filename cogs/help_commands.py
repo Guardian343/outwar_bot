@@ -74,7 +74,7 @@ CATEGORIES = {
             ("!god list",                        "Reference table — all gods with aliases and rec stats"),
             ("!god export",                      "Export live recommended power/ele/chaos to a .txt"),
             ("!beatable <group> [strict]",       "Gods a group can beat — avg (or 'strict' = all members) vs rec"),
-            ("!god set <name> <field> <value>",  "Update a god field (admin)"),
+            ("!god set <name> <field> <value>",  "Update a god field: recommended/hp/room/rec_* (admin)"),
             ("!god import <block>",              "Bulk-set recs from a stats block (admin)"),
             ("!prime-stats <god>",               "Show crew kill stats for a god"),
             ("!prime-drops <god>",               "Show drop table for a god"),
