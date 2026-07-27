@@ -44,6 +44,32 @@ class MiscCommands(commands.Cog):
         return self.bot.outwar
 
     # ------------------------------------------------------------------
+    # TEMPORARY DEBUG — dump raw envoy pages to inspect available signals.
+    # Remove after we've designed the auto-fetch trigger.
+    # ------------------------------------------------------------------
+    @commands.command(name="envoy-debug", hidden=True)
+    async def envoy_debug(self, ctx, target: str = None):
+        """TEMP: dump raw envoy pages to files on the Pi for inspection."""
+        import os
+        out_dir = os.path.expanduser("~")
+        pages = {"envoy_overview": "envoy_overview"}
+        if target:
+            pages[f"envoy_target_{target}"] = f"envoy?target={target}"
+        else:
+            pages["envoy_page"] = "envoy"
+        results = []
+        for label, path in pages.items():
+            try:
+                html = await self.session.get(path)
+                fp = os.path.join(out_dir, f"{label}.html")
+                with open(fp, "w", encoding="utf-8") as f:
+                    f.write(html)
+                results.append(f"✅ `{path}` → `~/{label}.html` ({len(html):,} bytes)")
+            except Exception as e:
+                results.append(f"❌ `{path}` failed: {e}")
+        await ctx.send("**Envoy debug dump:**\n" + "\n".join(results))
+
+    # ------------------------------------------------------------------
     # !check-item
     # ------------------------------------------------------------------
 

@@ -40,7 +40,7 @@ OWNER_COMMANDS = {
     # summary group subcommands — gate by qualified name so members are blocked
     # at the group (matching the classic summary-* commands, which were owner).
     "summary", "summary set", "summary remove", "summary list", "summary now",
-    "focusdrops", "unfocusdrops", "focuslist",
+    "focusdrops", "unfocusdrops", "focuslist", "envoy-debug",
     "autorank", "optimise", "optimise-all", "optimize-all", "optimiseall",
     "standings", "rankings",
     "scan-keys", "scankeys", "scan-teleporters",
