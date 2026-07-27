@@ -521,6 +521,19 @@ class RaidCommands(commands.Cog):
             {"label": "Rec. Ele",     "value": _fmt(god.get("rec_ele")),                      "color": TEXT_GREEN},
             {"label": "Rec. Chaos",   "value": _fmt(god.get("rec_chaos")),                    "color": TEXT_GOLD},
         ]
+        # Show the resolved room and where it came from, so a manual override
+        # (or crawl pickup) can be confirmed at a glance.
+        _room = self._resolve_god_room(god)
+        if _room:
+            if god.get("room"):
+                _src = "manual"
+            elif GOD_ROOMS.get(god["name"]):
+                _src = "table"
+            else:
+                _src = "crawl"
+            rows.append({"label": "Room", "value": f"{_room} ({_src})", "color": TEXT_BLUE})
+        else:
+            rows.append({"label": "Room", "value": "not set", "color": TEXT_DIM})
         if win_stats:
             rows += [
                 {"label": "Wins Recorded",  "value": str(win_stats["wins"]),              "color": TEXT_GOLD},
