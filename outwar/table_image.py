@@ -23,6 +23,7 @@ TEXT_DIM     = (155, 160, 200)   # was too dark, lifted significantly
 TEXT_GREEN   = ( 72, 230, 170)   # brighter green
 TEXT_RED     = (255, 100, 100)   # brighter red
 TEXT_GOLD    = (255, 205,  60)   # brighter gold
+TEXT_ORANGE  = (255, 150,  50)   # warning orange — nearly capped
 TEXT_BLUE    = (130, 185, 255)   # brighter blue
 DIVIDER      = ( 40,  44,  80)
 
@@ -200,6 +201,10 @@ def render_caps_table(group: str, results: list[dict]) -> io.BytesIO:
             return TEXT_DIM
         if row["cur"] <= 0:
             return TEXT_RED
+        # Nearly capped: 80%+ of caps used (but not fully). cur is remaining,
+        # so used-fraction = (max - cur) / max >= 0.8.
+        if (row["max"] - row["cur"]) / row["max"] >= 0.8:
+            return TEXT_ORANGE
         return TEXT_GREEN
 
     def name_color(row):
