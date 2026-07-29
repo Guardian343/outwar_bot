@@ -227,7 +227,8 @@ def render_caps_table(group: str, results: list[dict]) -> io.BytesIO:
         rows.append({
             "name":     r["name"],
             "faction":  r.get("faction", "—"),
-            "caps_str": f"{r['cur']}/{r['max']}" if r.get("max") else "—",
+            # Show USED / max, not remaining. cur is remaining, so used = max - cur.
+            "caps_str": f"{r['max'] - r['cur']}/{r['max']}" if r.get("max") else "—",
             "crew":     r.get("crew", "—"),
             "rage_str": f"{r.get('rage', 0):,}" if r.get("rage") else "—",
             "cur":      r.get("cur", 0),
