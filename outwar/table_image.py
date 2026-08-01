@@ -430,7 +430,7 @@ def render_boss_table(bosses: list[dict]) -> io.BytesIO:
     """
     def status_color(row):
         s = row.get("status", "").upper()
-        if s == "ALIVE":
+        if s in ("SPAWNED", "ALIVE"):
             return TEXT_GREEN
         if s == "NEAR":
             return TEXT_GOLD

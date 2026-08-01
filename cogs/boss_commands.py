@@ -355,16 +355,21 @@ class BossCommands(commands.Cog):
                     stats_html = await self.session.get(boss.stats_url)
                     _, total_dmg = parse_boss_damage(stats_html)
                     hp_pct = max(0.0, 100.0 - (total_dmg / boss.hp * 100.0)) if boss.hp > 0 else 100.0
-                    status = "ALIVE"
+                    status = "SPAWNED"
                 except Exception as e:
                     hp_pct = 100.0
-                    status = "ALIVE"
+                    status = "SPAWNED"
             else:
                 status = "DEAD"
 
-            # Calculate spawn window from last_killed + spawn_days ±25%
+            # Calculate spawn window from last_killed + spawn_days ±25%.
+            # ONLY when the boss is actually dead — a live boss shows as spawned
+            # with no window timing (the window predicts the NEXT spawn, which is
+            # meaningless while it's currently alive).
             spawn_window = ""
-            if boss.spawn_days > 0 and (boss.last_killed or db.get_boss_death_dt(boss.full_name)):
+            if boss.spawned:
+                spawn_window = ""          # alive → no window countdown
+            elif boss.spawn_days > 0 and (boss.last_killed or db.get_boss_death_dt(boss.full_name)):
                 try:
                     from datetime import timezone, timedelta as _td
                     CST = timezone(_td(hours=-6))
