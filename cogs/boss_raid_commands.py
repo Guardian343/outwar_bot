@@ -641,11 +641,11 @@ class BossRaidCommands(commands.Cog):
             if not _md_has_30min_left():
                 logger.info("BOSS_RAID", "[POTS] Under 30 min of MD left — stopping pot recasts")
                 break
-            result = await self._cast_boss_pots(trustees, boss_name, notify, pot_expiry_ref)
+            result = await self._cast_boss_pots(trustees, boss_name, notify, pot_expiry_ref, silent=True)
             pot_expiry_ref.update(result)
 
     async def _cast_boss_pots(self, trustees: list, boss_name: str, notify,
-                               pot_expiry: dict = None) -> dict:
+                               pot_expiry: dict = None, silent: bool = False) -> dict:
         """
         Cast boss-specific potions on all trustees.
         pot_expiry: {pot_key: timestamp} — only recasts pots that have expired.
@@ -767,8 +767,8 @@ class BossRaidCommands(commands.Cog):
                         pot_lines.append(f"**{name}**: {fresh} accounts")
                     else:
                         pot_lines.append(f"**{name}**: {active} already active")
-            if pot_lines:
-                await notify.send("🧪 Potions:\n" + "\n".join(pot_lines))
+            if pot_lines and not silent:
+                await notify.send("🧪 Potions cast:\n" + "\n".join(pot_lines))
         else:
             logger.warning("BOSS_RAID", f"[POTS] No potions cast for {boss_name} — accounts may not have pots in backpack")
 
