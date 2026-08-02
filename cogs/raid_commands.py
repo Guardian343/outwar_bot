@@ -2283,52 +2283,55 @@ class RaidCommands(commands.Cog):
             self.WORLD_RAID_MOBS["conductor"],
         ]
 
-        await ctx.send(
-            f"🏆 Starting badge raids with **{len(trustees)}** characters · **{tries}** tries each..."
+        # Single embed, edited in place — one clean message for the whole run.
+        embed = discord.Embed(
+            title="🏆 Badge Raids",
+            description=f"Starting with **{len(trustees)}** characters · **{tries}** tries each...",
+            color=discord.Color.blue()
         )
+        status_msg = await ctx.send(embed=embed)
 
         total_wins   = 0
         total_damage = 0
         start_time   = datetime.now()
+        result_lines = []   # one line per mob
 
         for mob in badge_mobs:
-            mob_wins   = 0
-            mob_damage = 0
-            spawned    = True
+            spawned = True
+            mob_result = None
             for attempt in range(1, tries + 1):
                 won, damage, note = await self._do_world_raid(trustees, mob)
                 if note and ("not spawned" in note.lower() or "could not form" in note.lower()):
-                    await ctx.send(f"⚠️ **{mob['name']}** is not spawned — skipping.")
+                    mob_result = f"⚠️ **{mob['name']}** — not spawned, skipped"
                     spawned = False
                     break
                 if damage:
-                    mob_damage   += damage
                     total_damage += damage
                 if won:
-                    mob_wins   += 1
                     total_wins += 1
-                    msg = f"🏆 **{mob['name']}** — Win on attempt {attempt}!"
+                    mob_result = f"🏆 **{mob['name']}** — win (attempt {attempt})"
                     if damage:
-                        msg += f" Damage: {damage:,}"
+                        mob_result += f" · {damage:,} dmg"
                     if note:
-                        msg += f"\n📦 {note}"
-                    await ctx.send(msg)
+                        mob_result += f"\n   📦 {note}"
                     break
                 else:
-                    msg = f"**{mob['name']}** attempt {attempt}/{tries} — no win."
-                    await ctx.send(msg)
+                    mob_result = f"❌ **{mob['name']}** — no win ({tries} tries)"
                 if attempt < tries:
                     await asyncio.sleep(2)
 
+            result_lines.append(mob_result)
+            embed.description = "\n".join(result_lines)
+            await status_msg.edit(embed=embed)
+
+        # Finalise the same embed
         elapsed = (datetime.now() - start_time).seconds
-        embed = discord.Embed(
-            title=f"🏆 Badge Raids Complete",
-            color=discord.Color.gold() if total_wins == len(badge_mobs) else discord.Color.blue()
-        )
+        embed.title = "🏆 Badge Raids — Complete"
+        embed.color = discord.Color.gold() if total_wins == len(badge_mobs) else discord.Color.blue()
         embed.add_field(name="Wins",         value=f"{total_wins}/{len(badge_mobs)}", inline=True)
         embed.add_field(name="Total Damage", value=f"{total_damage:,}",               inline=True)
         embed.add_field(name="Time",         value=f"{elapsed}s",                     inline=True)
-        await ctx.send(embed=embed)
+        await status_msg.edit(embed=embed)
 
     @commands.command(name="tce")
     async def tce_raid(self, ctx, group: str, tries: int = 1):
@@ -2342,45 +2345,60 @@ class RaidCommands(commands.Cog):
             return
 
         mob = self.WORLD_RAID_MOBS["tce"]
-        await ctx.send(
-            f"⚡ Hitting **{mob['name']}** with **{len(trustees)}** characters · **{tries}** tries..."
+
+        # Single embed, edited in place — keeps the channel clean instead of
+        # posting a start line + per-attempt lines + a summary.
+        embed = discord.Embed(
+            title=f"⚡ {mob['name']}",
+            description=f"Hitting with **{len(trustees)}** characters · **{tries}** tries...",
+            color=discord.Color.blue()
         )
+        status_msg = await ctx.send(embed=embed)
 
         total_wins   = 0
         total_damage = 0
         start_time   = datetime.now()
+        log_lines    = []
 
         for attempt in range(1, tries + 1):
             won, damage, note = await self._do_world_raid(trustees, mob)
             if note and ("not spawned" in note.lower() or "could not form" in note.lower()):
-                await ctx.send(f"⚠️ **{mob['name']}** is not spawned.")
+                embed.description = f"⚠️ **{mob['name']}** is not spawned."
+                embed.color = discord.Color.red()
+                await status_msg.edit(embed=embed)
                 return
             if damage:
                 total_damage += damage
             if won:
                 total_wins += 1
-                msg = f"🏆 **Win** on attempt {attempt}!"
+                line = f"🏆 Win on attempt {attempt}!"
                 if damage:
-                    msg += f" Damage: {damage:,}"
+                    line += f" Damage: {damage:,}"
                 if note:
-                    msg += f"\n📦 {note}"
-                await ctx.send(msg)
+                    line += f"\n📦 {note}"
+                log_lines.append(line)
             else:
-                msg = f"Attempt {attempt}/{tries} — no win."
-                await ctx.send(msg)
+                log_lines.append(f"Attempt {attempt}/{tries} — no win.")
+
+            # Update the live embed with progress so far
+            embed.description = "\n".join(log_lines)
+            await status_msg.edit(embed=embed)
+
+            if won:
+                break
             if attempt < tries:
                 await asyncio.sleep(2)
 
+        # Finalise the same embed into the summary
         elapsed = (datetime.now() - start_time).seconds
-        embed = discord.Embed(
-            title=f"⚡ TCE Complete",
-            color=discord.Color.gold() if total_wins > 0 else discord.Color.blue()
-        )
+        embed.title = f"⚡ {mob['name']} — Complete"
+        embed.color = discord.Color.gold() if total_wins > 0 else discord.Color.blue()
+        embed.clear_fields()
         embed.add_field(name="Attempts",     value=str(tries),          inline=True)
         embed.add_field(name="Wins",         value=str(total_wins),     inline=True)
         embed.add_field(name="Total Damage", value=f"{total_damage:,}", inline=True)
         embed.add_field(name="Time",         value=f"{elapsed}s",       inline=True)
-        await ctx.send(embed=embed)
+        await status_msg.edit(embed=embed)
 
     @commands.command(name="crest")
     async def crest_raid(self, ctx, group: str, target: str = "both", tries: int = 1):
@@ -2409,44 +2427,51 @@ class RaidCommands(commands.Cog):
             return
 
         names = " + ".join(t["name"] for t in targets)
-        await ctx.send(f"⚔️ Hitting **{names}** with **{len(trustees)}** characters · **{tries}** tries each...")
+        embed = discord.Embed(
+            title="⚔️ Crest Raids",
+            description=f"Hitting **{names}** with **{len(trustees)}** characters · **{tries}** tries each...",
+            color=discord.Color.blue()
+        )
+        status_msg = await ctx.send(embed=embed)
 
         start_time   = datetime.now()
         total_wins   = 0
         total_damage = 0
+        result_lines = []
 
         for mob in targets:
+            mob_result = None
             for attempt in range(1, tries + 1):
                 won, damage, note = await self._do_world_raid(trustees, mob)
                 if note and ("not spawned" in note.lower() or "could not form" in note.lower()):
-                    await ctx.send(f"⚠️ **{mob['name']}** is not spawned — skipping.")
+                    mob_result = f"⚠️ **{mob['name']}** — not spawned, skipped"
                     break
                 if damage:
                     total_damage += damage
                 if won:
                     total_wins += 1
-                    msg = f"🏆 **{mob['name']}** — Win on attempt {attempt}!"
+                    mob_result = f"🏆 **{mob['name']}** — win (attempt {attempt})"
                     if damage:
-                        msg += f" Damage: {damage:,}"
+                        mob_result += f" · {damage:,} dmg"
                     if note:
-                        msg += f"\n📦 {note}"
-                    await ctx.send(msg)
+                        mob_result += f"\n   📦 {note}"
                     break
                 else:
-                    msg = f"**{mob['name']}** attempt {attempt}/{tries} — no win."
-                    await ctx.send(msg)
+                    mob_result = f"❌ **{mob['name']}** — no win ({tries} tries)"
                 if attempt < tries:
                     await asyncio.sleep(2)
 
+            result_lines.append(mob_result)
+            embed.description = "\n".join(result_lines)
+            await status_msg.edit(embed=embed)
+
         elapsed = (datetime.now() - start_time).seconds
-        embed = discord.Embed(
-            title="⚔️ Crest Raids Complete",
-            color=discord.Color.gold() if total_wins == len(targets) else discord.Color.blue()
-        )
+        embed.title = "⚔️ Crest Raids — Complete"
+        embed.color = discord.Color.gold() if total_wins == len(targets) else discord.Color.blue()
         embed.add_field(name="Wins",         value=f"{total_wins}/{len(targets)}", inline=True)
         embed.add_field(name="Total Damage", value=f"{total_damage:,}",            inline=True)
         embed.add_field(name="Time",         value=f"{elapsed}s",                  inline=True)
-        await ctx.send(embed=embed)
+        await status_msg.edit(embed=embed)
 
     # ------------------------------------------------------------------
     # God Slayer — verification commands (data only; raiding comes next)

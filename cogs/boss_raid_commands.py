@@ -466,12 +466,16 @@ class BossRaidCommands(commands.Cog):
     # ------------------------------------------------------------------
 
     async def _get_spawned_bosses(self) -> list:
-        """Fetch crew_bossspawns and return list of spawned boss names in priority order."""
+        """Fetch crew_bossspawns and return list of spawned boss names.
+        Priority bosses first (in priority order), then any other spawned
+        bosses not in the priority list (e.g. event bosses like Solkaar)."""
         html = await self.session.get("crew_bossspawns")
         bosses = parse_bosses(html)
         spawned_names = [b.full_name for b in bosses if b.spawned]
-        # Return in priority order
-        return [b for b in BOSS_PRIORITY if b in spawned_names]
+        # Priority bosses in order, then append any extras (event bosses etc.)
+        ordered = [b for b in BOSS_PRIORITY if b in spawned_names]
+        extras  = [n for n in spawned_names if n not in BOSS_PRIORITY]
+        return ordered + extras
 
     # ------------------------------------------------------------------
     # Boss raiding
@@ -2002,7 +2006,12 @@ class BossRaidCommands(commands.Cog):
 
         spawned = await self._get_spawned_bosses()
         if boss:
-            current_boss = next((b for b in BOSS_PRIORITY if boss.lower() in b.lower()), None)
+            # Match against live spawned bosses first (catches event bosses like
+            # Solkaar that aren't in the hardcoded BOSS_PRIORITY list), then fall
+            # back to the priority list for a dead/known boss the user named.
+            current_boss = next((b for b in spawned if boss.lower() in b.lower()), None)
+            if not current_boss:
+                current_boss = next((b for b in BOSS_PRIORITY if boss.lower() in b.lower()), None)
             if not current_boss:
                 await ctx.send(f"❌ Boss `{boss}` not recognised.")
                 return

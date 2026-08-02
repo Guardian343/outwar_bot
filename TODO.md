@@ -238,6 +238,11 @@ Last updated: 2026-08-02
 ## ✅ Completed
 
 ### Sessions 2026-07-22 → 08-02 (Pi migration + fixes)
+- [x] **`!boss raid` recognises event bosses** — the raid command matched names only against the
+      hardcoded BOSS_PRIORITY list, so event bosses (e.g. Solkaar) weren't raidable even though !boss dmg
+      and !boss list saw them (those read the live spawn page). Fixed: _get_spawned_bosses now includes
+      spawned bosses not in BOSS_PRIORITY (appended after priority ones), and the name lookup matches live
+      spawned bosses first, then falls back to BOSS_PRIORITY.
 - [x] **Raspberry Pi 4 migration COMPLETE** — bot + FastAPI supervisor now run 24/7 on a Pi 4 (8GB),
       survive reboots. Supervisor owns the bot (Route 2) as systemd service `deathbot-supervisor`; standalone
       `deathbot` service deleted + MASKED (caused a two-bots session flood on 07-29 via `restart deathbot`).
