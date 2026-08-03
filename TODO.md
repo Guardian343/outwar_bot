@@ -3,6 +3,30 @@ Last updated: 2026-08-02
 
 ## 🔴 Critical (Fix Before Next Major Session)
 
+- [x] **MD cycle ended early, wasting MD (the real "mixed status" cause)** — FIXED 2026-08-02
+  ROOT CAUSE (found after tracing the actual loop, not the display): the inner raid loop broke when a
+  **50% MAJORITY** of accounts' MD expired (line ~1164, `majority_expired`), NOT when the last account
+  expired. So with even a 3-min cast spread, once ~130/197 crossed the active→cooldown line the cycle
+  moved on, leaving the other ~67 with ~2 min of UNUSED MD active → that's the "67 ready/130 cooldown"
+  message, and wasted MD. The 50% threshold was a deliberate "don't let a straggler hold the loop" choice
+  but conflicted with Liam's explicit requirement.
+  FIX: cycle now runs until the LAST account's MD expires (`all_expired = len(still_active_now) == 0`).
+  Every account's MD is spent by cycle end; no fragmentation. Safe because casts are tightly grouped
+  (verified 3-min spread) and stale previous-cycle records are already filtered from md_end_times.
+  ALSO FIXED: the "Raids continue for Xh" DISPLAY used min() (earliest account) — now uses max() to match.
+  ALSO ADDED: **drift monitor** — existing >5min drift logging now ESCALATES to a channel alert when any
+  account is ≥15 min out of sync (Liam's concern: large drift + run-to-last = wasted rage). Surfaces drift
+  before it becomes a rage problem.
+  ⚠️ VERIFY AFTER DEPLOY: watch that casting stays tightly grouped across sessions (doesn't creep to
+  15/30/60 min). If the drift alert fires, investigate casting reliability at the source.
+  NOTE: the SECONDARY 50% gate at line ~1146 is triggered by a BOSS DYING (not MD expiry) and decides:
+  keep raiding the next boss on still-active MD, ELSE fall through to WAIT FOR RECHARGE (you can't recast
+  MD mid-cooldown — it must recharge). After this fix both real scenarios land correctly: boss died →
+  everyone still active → continue; MD expired → everyone expired → wait. So the 50% there is now largely
+  inert. The recharge-wait (`_wait_for_md_recharge`) ALREADY waits for the LAST account (max_ready), which
+  is correct. Left the gate unchanged — low-impact, touches the boss-died path, needs live testing.
+
+
 - [ ] **Verify background pot task vs raid session isolation** `🔴 Hard`
   Historically a cookie-jar race: `_cast_boss_pots_bg` switched `ow_userid` per account while
   `_do_boss_raid` ran concurrently. The migration to per-request `_as` calls (post_as/get_as pass

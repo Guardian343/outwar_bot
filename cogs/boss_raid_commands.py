@@ -440,9 +440,16 @@ class BossRaidCommands(commands.Cog):
                 remaining = record["cast_at"] + MD_ACTIVE_SECS - now_ts2
                 if remaining > 0:
                     remaining_list.append(remaining)
-        min_remaining = int(min(remaining_list)) if remaining_list else MD_ACTIVE_SECS
-        md_cast_time  = now_ts2 + min_remaining - MD_ACTIVE_SECS
-        logger.info("BOSS_RAID", f"[CAST] MD duration: {min_remaining//60:.0f}m remaining (min across {len(remaining_list)} accounts)")
+        # Run the raid cycle to the LATEST-expiring account's MD, not the earliest.
+        # Using max (not min) means the cycle continues until the LAST account's MD
+        # expires — squeezing in the extra raids the longer-lived accounts can still
+        # do, and ensuring EVERY account's MD is spent by cycle end (no account left
+        # with unused MD, no mixed-status fragmentation). The earliest-expiring
+        # accounts lose their MD a couple of minutes before the very end, which is
+        # the intended trade for keeping the fleet synchronised and maximising raids.
+        md_remaining = int(max(remaining_list)) if remaining_list else MD_ACTIVE_SECS
+        md_cast_time  = now_ts2 + md_remaining - MD_ACTIVE_SECS
+        logger.info("BOSS_RAID", f"[CAST] MD duration: {md_remaining//60:.0f}m remaining (max across {len(remaining_list)} accounts)")
 
         for t in sorted_t:
             suid = t.get("suid")
@@ -450,8 +457,8 @@ class BossRaidCommands(commands.Cog):
                 duration_map[suid] = {Skill.MARKDOWN: MD_DURATION, Skill.LAST_STAND: 3600}
 
         elapsed_s     = int((datetime.now() - cast_start).total_seconds())
-        md_expires_ts = int(now_ts2) + min_remaining
-        hrs, mins_rem = divmod(min_remaining // 60, 60)
+        md_expires_ts = int(now_ts2) + md_remaining
+        hrs, mins_rem = divmod(md_remaining // 60, 60)
         duration_str  = f"{hrs}h {mins_rem}m" if hrs else f"{mins_rem}m"
         await ctx.send(
             f"✅ Skills cast in **{elapsed_s}s** · SiN: **{sin_name}** · MD active · "
@@ -1152,10 +1159,17 @@ class BossRaidCommands(commands.Cog):
                     while not self._stop_flag:
                         now_ts = datetime.now().timestamp()
                         still_active_now = [s for s, end in md_end_times.items() if end > now_ts]
-                        # Break when majority have expired, not literally everyone —
-                        # one drifted/straggler account shouldn't hold the loop hostage
-                        majority_expired = len(still_active_now) < max(5, len(md_end_times) * 0.5)
-                        if majority_expired:
+                        # Run until the LAST account's MD expires (not a 50% majority).
+                        # This ensures no account ends the cycle with unused MD — the
+                        # earlier-expiring accounts finish their MD naturally while the
+                        # longer-lived ones squeeze in a couple more raids, so the whole
+                        # fleet's MD is spent by cycle end (no mixed-status fragmentation).
+                        # SAFE because casts are tightly grouped (~3min spread); stale
+                        # previous-cycle records are already filtered out of md_end_times.
+                        # If casting ever drifts badly (15/30/60 min), the drift monitor
+                        # below will flag it before it wastes meaningful rage.
+                        all_expired = len(still_active_now) == 0
+                        if all_expired:
                             break  # fall through to full MD recheck below
 
                         try:
@@ -1595,6 +1609,20 @@ class BossRaidCommands(commands.Cog):
                                 f"{name} ({(ts - group_cast_at) / 60:+.0f}m)" for name, ts in drifted
                             )
                             logger.info("BOSS_RAID", f"[MD] {len(drifted)} account(s) drifted from group cast time: {drift_desc}")
+                            # Escalate to a CHANNEL alert if drift is large enough to
+                            # matter for rage. Running the cycle to the last account is
+                            # safe while drift is small (~3min), but if casts spread to
+                            # 15+ min, the cycle runs that much longer and wastes rage on
+                            # the early-expiring accounts sitting idle. Surface it so it
+                            # can be investigated before it becomes a real problem.
+                            max_drift_mins = max(abs(ts - group_cast_at) / 60 for _, ts in drifted)
+                            if max_drift_mins >= 15:
+                                await notify.send(
+                                    f"⚠️ **MD cast drift detected** — {len(drifted)} account(s) are "
+                                    f"up to **{max_drift_mins:.0f} min** out of sync with the group. "
+                                    f"The raid cycle runs until the last account's MD expires, so large "
+                                    f"drift wastes rage on early-finishing accounts. Worth checking casting."
+                                )
 
                 md_end_times_persist.clear()
                 md_end_times_persist.update(md_end_times)
