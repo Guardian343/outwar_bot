@@ -218,8 +218,14 @@ Last updated: 2026-08-02
          text-in-embed per envoy (aligned # / Character / Lvl / Atk in a code block, handles long lists),
          with a "Cycle ends in Xd Yh" header from the countdown timestamp. Also updates the dashboard's
          stale envoy_loot_pool with the real value while it's at it (fixes the orphaned pool display).
-         STILL TO BUILD: auto-refresh loop (edit the embeds every 24h instead of re-posting — store the 8
-         message IDs, persist to disk); at rollover replace with loot winners then fresh boards.
+         STILL TO BUILD: at rollover replace with loot winners then fresh boards (needs Aug 20 observation).
+         **AUTO-REFRESH BUILT 2026-08-10** ✅ — `!envoy autoboard start|stop|refresh|status`. Posts the 8
+         embeds to the **envoys** alert channel (same channel as envoy alerts), edits them IN PLACE on a
+         daily schedule. Timing is ANCHORED to the envoy reset (17:30 UK, in `_leaderboard_refresh_hour/
+         minute`), NOT 24h-from-start — so the daily refresh is consistent and the last refresh of a cycle
+         lands near the rollover for an accurate final board. Message IDs persist in settings
+         (envoy_leaderboard_msgs) → restart-proof; loop auto-resumes on startup if IDs exist. If a tracked
+         message is deleted it reposts just that one.
          ENVOY NAMES (Liam, confirmed, all distinct — no dupes): **MOB, PVP, RAID, ALVAR, DELRUK, VORDYN,
          PP (HARD), PP (EASY)**. Header currently uses the `envoy-title` div (showed "Mob Envoy" on target 1).
          VERIFY on next run: do all 8 titles read sensibly + do target IDs 1..8 map to these names in order?

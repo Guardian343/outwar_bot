@@ -108,6 +108,10 @@ class GodMonitor(commands.Cog):
         self._monitor_running = False
         self._last_god_poll = None  # tracks last half-hour window polled
         self._envoy_cycle_end_ts = None  # last-seen envoy cycle-end unix ts (rollover detection)
+        # Envoy leaderboard auto-refresh: anchored to the envoy cycle reset (~17:30 UK)
+        self._leaderboard_refresh_hour = 17
+        self._leaderboard_refresh_minute = 30
+        self._last_leaderboard_refresh = None
 
     @property
     def session(self):
@@ -129,6 +133,10 @@ class GodMonitor(commands.Cog):
             self.boss_poll_loop.start()
             self.daily_summary_loop.start()
             self.session_check_loop.start()
+            # Resume auto-leaderboard refresh if previously set up (tracked message IDs
+            # exist), so a restart keeps editing the existing embeds on schedule.
+            if db.get_settings().get("envoy_leaderboard_msgs"):
+                self.leaderboard_refresh_loop.start()
             logger.info("GOD_MONITOR", "God and boss monitors started.")
             await self._post_startup_state()
 
@@ -137,6 +145,10 @@ class GodMonitor(commands.Cog):
         self.boss_poll_loop.cancel()
         self.daily_summary_loop.cancel()
         self.session_check_loop.cancel()
+        try:
+            self.leaderboard_refresh_loop.cancel()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Poll loops
@@ -1213,16 +1225,14 @@ class GodMonitor(commands.Cog):
         """The Envoy Quartermaster shop. Same as !envoy-shop."""
         await self._envoy_redispatch(ctx, "envoy-shop")
 
-    @envoy.command(name="leaderboard", aliases=["board", "lb"])
-    async def envoy_leaderboard_sub(self, ctx):
-        """Post the current leaderboard for each of the 8 envoys (one embed each)."""
+    async def _build_envoy_leaderboard_embeds(self):
+        """Fetch all 8 envoy pages and build one embed each. Returns (embeds, latest_pool).
+        Shared by the manual !envoy leaderboard command and the daily auto-refresh loop.
+        """
         from outwar.scraper import (parse_envoy_leaderboard, parse_envoy_latest_pool,
                                      parse_envoy_name, parse_envoy_buff_account)
         import re as _re, time as _time
 
-        status_msg = await ctx.send("⏳ Fetching envoy leaderboards…")
-
-        # Cycle countdown for the header (from envoy_overview)
         countdown_str = ""
         try:
             overview = await self.session.get("envoy_overview")
@@ -1236,11 +1246,7 @@ class GodMonitor(commands.Cog):
         except Exception:
             pass
 
-        # Envoy target pages are always target=1..8. Pull each page directly —
-        # no dependency on parse_envoys(primegods), which can be empty when the
-        # envoys aren't listed on the primegods page. Name + leaderboard both
-        # live on the target page itself.
-        posted = 0
+        embeds = []
         latest_pool = None
         for target_id in range(1, 9):
             try:
@@ -1250,9 +1256,6 @@ class GodMonitor(commands.Cog):
                 buff_account = parse_envoy_buff_account(page)
                 if latest_pool is None:
                     latest_pool = parse_envoy_latest_pool(page)
-                # Build the table — or a placeholder when no one has attacked yet.
-                # We still post the embed (never skip) so all 8 envoys stay present
-                # and in numerical order for later edits / mid-cycle leaderboards.
                 if rows:
                     lines = ["```", f"{'#':<3}{'Character':<20}{'Lvl':>4}{'Atk':>6}"]
                     for r in rows:
@@ -1263,21 +1266,18 @@ class GodMonitor(commands.Cog):
                 else:
                     table = "*No attacks yet this cycle.*"
                 header = f"{es.ICON_ENVOY} {name} — Leaderboard"
-                # Subtitle: countdown + which account gets the buff this cycle
                 subtitle_bits = []
                 if countdown_str:
                     subtitle_bits.append(countdown_str)
                 if buff_account:
                     subtitle_bits.append(f"🎁 Buff → {buff_account}")
                 subtitle = ("\n".join(subtitle_bits) + "\n") if subtitle_bits else ""
-                desc = subtitle + table
-                await ctx.send(embed=es.info_embed(header, desc))
-                posted += 1
+                embeds.append(es.info_embed(header, subtitle + table))
             except Exception as e:
-                logger.warning("GOD_MONITOR", f"Leaderboard fetch failed for target {target_id}: {e}")
+                logger.warning("GOD_MONITOR", f"Leaderboard build failed for target {target_id}: {e}")
+                embeds.append(es.info_embed(f"{es.ICON_ENVOY} Envoy {target_id} — Leaderboard",
+                                            "*Could not load this cycle.*"))
 
-        # Update the dashboard's stale pool number while we're here (fixes the
-        # orphaned envoy_pool_last — we now have the real value from the page).
         if latest_pool is not None:
             try:
                 settings = db.get_settings()
@@ -1285,9 +1285,114 @@ class GodMonitor(commands.Cog):
                 db.save_settings(settings)
             except Exception:
                 pass
+        return embeds, latest_pool
 
-        await status_msg.edit(content=f"✅ Posted {posted} envoy leaderboard(s)." +
+    async def _post_or_refresh_leaderboards(self, force_repost: bool = False):
+        """Post the 8 leaderboard embeds to the envoys channel, or edit them in place
+        if we already have their message IDs (persisted in settings → restart-proof)."""
+        channel = await self._get_alert_channel("envoys")
+        if not channel:
+            logger.warning("GOD_MONITOR", "Auto-leaderboard: no envoys channel set")
+            return
+        embeds, _ = await self._build_envoy_leaderboard_embeds()
+        settings = db.get_settings()
+        stored = settings.get("envoy_leaderboard_msgs", {})
+        key = str(channel.id)
+        msg_ids = stored.get(key, []) if not force_repost else []
+
+        new_ids = []
+        if len(msg_ids) == len(embeds) and not force_repost:
+            # Edit existing messages in place
+            for mid, embed in zip(msg_ids, embeds):
+                try:
+                    msg = await channel.fetch_message(mid)
+                    await msg.edit(embed=embed)
+                    new_ids.append(mid)
+                except Exception:
+                    m = await channel.send(embed=embed)  # message gone — repost this one
+                    new_ids.append(m.id)
+        else:
+            # Fresh post: clear any stale messages, post new ones
+            for mid in msg_ids:
+                try:
+                    old = await channel.fetch_message(mid)
+                    await old.delete()
+                except Exception:
+                    pass
+            for embed in embeds:
+                m = await channel.send(embed=embed)
+                new_ids.append(m.id)
+
+        stored[key] = new_ids
+        settings["envoy_leaderboard_msgs"] = stored
+        db.save_settings(settings)
+
+    @envoy.command(name="leaderboard", aliases=["board", "lb"])
+    async def envoy_leaderboard_sub(self, ctx):
+        """Post the current leaderboard for each of the 8 envoys (one embed each)."""
+        status_msg = await ctx.send("⏳ Fetching envoy leaderboards…")
+        embeds, latest_pool = await self._build_envoy_leaderboard_embeds()
+        for e in embeds:
+            await ctx.send(embed=e)
+        await status_msg.edit(content=f"✅ Posted {len(embeds)} envoy leaderboard(s)." +
                               (f" Latest pool: {latest_pool}." if latest_pool else ""))
+
+    @envoy.command(name="autoboard")
+    async def envoy_autoboard_sub(self, ctx, action: str = "status"):
+        """Auto-updating leaderboard in the envoys channel. Usage:
+        !envoy autoboard start|stop|refresh|status"""
+        action = (action or "status").lower()
+        if action == "start":
+            channel = await self._get_alert_channel("envoys")
+            if not channel:
+                await ctx.send("❌ No **envoys** alert channel is set. Set one first (same as envoy alerts).")
+                return
+            await ctx.send(f"⏳ Posting auto-leaderboards to {channel.mention}…")
+            await self._post_or_refresh_leaderboards(force_repost=True)
+            if not self.leaderboard_refresh_loop.is_running():
+                self.leaderboard_refresh_loop.start()
+            hh = f"{self._leaderboard_refresh_hour:02d}:{self._leaderboard_refresh_minute:02d}"
+            await ctx.send(f"✅ Auto-leaderboards started — refreshes daily at **{hh} UK** "
+                           f"(aligned to the envoy reset).")
+        elif action == "stop":
+            if self.leaderboard_refresh_loop.is_running():
+                self.leaderboard_refresh_loop.cancel()
+            await ctx.send("🛑 Auto-leaderboard refresh stopped. (Existing embeds stay; `start` to resume.)")
+        elif action == "refresh":
+            await ctx.send("⏳ Refreshing leaderboards now…")
+            await self._post_or_refresh_leaderboards(force_repost=False)
+            await ctx.send("✅ Leaderboards refreshed.")
+        else:
+            running = self.leaderboard_refresh_loop.is_running()
+            ids = db.get_settings().get("envoy_leaderboard_msgs", {})
+            total = sum(len(v) for v in ids.values())
+            hh = f"{self._leaderboard_refresh_hour:02d}:{self._leaderboard_refresh_minute:02d}"
+            await ctx.send(f"Auto-leaderboard: {'🟢 running' if running else '🔴 stopped'} — "
+                           f"{total} tracked message(s), daily refresh at **{hh} UK**.")
+
+    @tasks.loop(minutes=1)
+    async def leaderboard_refresh_loop(self):
+        # Fire once a day at a time anchored to the envoy cycle reset (~17:30 UK),
+        # not 24h-from-start. Keeps the daily update consistent and lands the last
+        # refresh of a cycle near the rollover for an accurate final leaderboard.
+        import pytz
+        now_uk = datetime.now(pytz.timezone("Europe/London"))
+        if not (now_uk.hour == self._leaderboard_refresh_hour and
+                now_uk.minute == self._leaderboard_refresh_minute):
+            return
+        stamp = now_uk.strftime("%Y-%m-%d %H:%M")
+        if self._last_leaderboard_refresh == stamp:
+            return
+        self._last_leaderboard_refresh = stamp
+        try:
+            await self._post_or_refresh_leaderboards(force_repost=False)
+            logger.info("GOD_MONITOR", "Envoy leaderboards auto-refreshed (daily)")
+        except Exception as e:
+            logger.warning("GOD_MONITOR", f"Leaderboard refresh error: {e}")
+
+    @leaderboard_refresh_loop.before_loop
+    async def before_leaderboard_refresh(self):
+        await self.bot.wait_until_ready()
 
     @commands.command(name="envoys")
     async def envoy_status(self, ctx):
