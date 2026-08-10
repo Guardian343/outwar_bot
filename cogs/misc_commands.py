@@ -637,6 +637,29 @@ class GroupStatCommands(commands.Cog):
                 )
 
         results = await asyncio.gather(*[_fetch_cap(t) for t in trustees])
+
+        # One extra fetch: the crew's cap-status page has everyone's NEXT-cap time in
+        # the "Crew Member Status" table. Fetch it ONCE (as a trustee in the crew) and
+        # cross-reference by account name — far cheaper than per-account, and gives the
+        # "Next Cap" column. Uses the bot's own session (get_as), no stored SSID.
+        try:
+            from outwar.scraper import parse_crew_cap_status
+            crew_suid = next((t.get("suid") for t in trustees if t.get("suid")), None)
+            if crew_suid:
+                cap_html = await self.session.get_as("crew_capstatus", int(crew_suid))
+                crew_caps = parse_crew_cap_status(cap_html)
+                for r in results:
+                    entry = crew_caps.get(r["name"])
+                    if entry and entry.get("next_expiry"):
+                        # Only show a next-cap time when the account is actually capped
+                        # (no free caps). If it has caps available, next-cap isn't useful.
+                        r["next_cap"] = entry["next_expiry"] if r.get("cur", 0) <= 0 else "—"
+                    else:
+                        r["next_cap"] = "—"
+        except Exception:
+            for r in results:
+                r.setdefault("next_cap", "—")
+
         results.sort(key=lambda x: (x["cur"] <= 0 if x["max"] else True, -x["cur"]))
 
         buf = render_caps_table(group, results)

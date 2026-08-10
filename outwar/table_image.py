@@ -218,6 +218,7 @@ def render_caps_table(group: str, results: list[dict]) -> io.BytesIO:
         {"key": "name",     "label": "Character",  "align": "left",   "color_fn": name_color},
         {"key": "faction",  "label": "Faction",    "align": "left",   "color_fn": lambda r: TEXT_BLUE},
         {"key": "caps_str", "label": "Caps",       "align": "center", "color_fn": cap_color},
+        {"key": "next_cap", "label": "Next Cap",   "align": "center", "color_fn": lambda r: TEXT_DIM},
         {"key": "crew",     "label": "Crew",       "align": "left",   "color_fn": lambda r: TEXT_DIM},
         {"key": "rage_str", "label": "Rage",       "align": "right",  "color_fn": lambda r: TEXT_GOLD},
     ]
@@ -230,6 +231,7 @@ def render_caps_table(group: str, results: list[dict]) -> io.BytesIO:
             # Show USED / max, not remaining. cur is remaining, so used = max - cur.
             "caps_str": f"{r['max'] - r['cur']}/{r['max']}" if r.get("max") else "—",
             "crew":     r.get("crew", "—"),
+            "next_cap": r.get("next_cap", "—"),
             "rage_str": f"{r.get('rage', 0):,}" if r.get("rage") else "—",
             "cur":      r.get("cur", 0),
             "max":      r.get("max", 0),

@@ -1576,3 +1576,36 @@ def size_slayer_roster(needers, non_needers, max_join, min_join=0, scores=None):
     # Ensure we can at least launch (reach min); needers may already exceed max
     # in which case min is moot. Only matters when roster < min_join.
     return roster
+
+
+def parse_crew_cap_status(html: str) -> dict:
+    """Parse the 'Crew Member Status' table from crew_capstatus into
+    {account_name: {"used": int, "max": int, "next_expiry": str}}.
+
+    Row format: <tr><td>AberamaGold</td><td>10/10</td><td>08/13/26 03:13am</td></tr>
+    where 10/10 = used/max caps and the last cell is when the next cap frees up.
+    Isolates the 'Crew Member Status' section first so the left-side 'Player Cap
+    Status' table isn't picked up.
+    """
+    import re
+    if not html:
+        return {}
+    lower = html.lower()
+    start = lower.find("crew member status")
+    section = html[start:] if start >= 0 else html
+
+    out = {}
+    row_re = re.compile(
+        r"<tr>\s*<td>\s*([^<]+?)\s*</td>\s*"
+        r"<td>\s*(\d+)\s*/\s*(\d+)\s*</td>\s*"
+        r"<td>\s*([^<]*?)\s*</td>",
+        re.I | re.S,
+    )
+    for m in row_re.finditer(section):
+        name = m.group(1).strip()
+        used = int(m.group(2))
+        mx   = int(m.group(3))
+        expiry = m.group(4).strip()
+        if name:
+            out[name] = {"used": used, "max": mx, "next_expiry": expiry or None}
+    return out
