@@ -412,6 +412,22 @@ class GodMonitor(commands.Cog):
             # Reset the countdown-alert message tracker for the new cycle
             self._envoy_alert_msg_id = None
 
+            # --- Arithmetic pool tracking + delayed auto-loot-fetch ---
+            # The pool increments by exactly 1 each cycle. The bot tracks it rather than
+            # only scraping: the stored pool is the one that JUST ENDED (its loot is now
+            # rolling); the new active pool = ended + 1.
+            try:
+                settings = db.get_settings()
+                ended_pool = settings.get("envoy_loot_pool")
+                if ended_pool is not None:
+                    settings["envoy_loot_pool"] = ended_pool + 1
+                    db.save_settings(settings)
+                    logger.info("GOD_MONITOR",
+                                f"[ENVOY ROLLOVER] pool {ended_pool} ended → new active pool {ended_pool + 1}")
+                    self.bot.loop.create_task(self._auto_fetch_ended_pool(ended_pool))
+            except Exception as e:
+                logger.warning("GOD_MONITOR", f"[ENVOY ROLLOVER] pool tracking error: {e}")
+
         # --- Countdown alerts (1d / 1h) — delete + repost so they notify without
         # cluttering. Each threshold fires once per cycle; state persists so a
         # restart doesn't re-fire an already-passed one. On rollover, reset. ---
@@ -999,6 +1015,80 @@ class GodMonitor(commands.Cog):
         except Exception as e:
             logger.warning("GOD_MONITOR", f"Daily summary error: {e}")
 
+    async def _auto_fetch_ended_pool(self, ended_pool: int):
+        """After a rollover, wait for the ended pool's loot to finish rolling, then
+        auto-fetch + post winners. Uses the REAL loot status code from the SSE stream
+        (status 3 = 'Loot completed'; 1/2/2.5 = still preparing/rolling) rather than a
+        fixed delay alone. Waits an initial delay, then polls status; posts when done,
+        retries while still rolling, and falls back to a manual-fetch alert on timeout.
+        """
+        from outwar.scraper import Envoy as _Envoy, parse_loot_status
+        INITIAL_DELAY = 15 * 60   # 15 min before first status check
+        RETRY_DELAY   = 10 * 60   # 10 min between checks while still rolling
+        MAX_RETRIES   = 6         # → up to ~15 + 6×10 = 75 min total
+
+        envoys = [
+            _Envoy(envoy_id=1, name="Mob Envoy",       spawned=False, stats_url="envoy?target=1"),
+            _Envoy(envoy_id=2, name="PVP Envoy",       spawned=False, stats_url="envoy?target=2"),
+            _Envoy(envoy_id=3, name="Raid Envoy",      spawned=False, stats_url="envoy?target=3"),
+            _Envoy(envoy_id=4, name="Alvar Envoy",     spawned=False, stats_url="envoy?target=4"),
+            _Envoy(envoy_id=5, name="Delruk Envoy",    spawned=False, stats_url="envoy?target=5"),
+            _Envoy(envoy_id=6, name="Vordyn Envoy",    spawned=False, stats_url="envoy?target=6"),
+            _Envoy(envoy_id=7, name="PP Envoy (Hard)", spawned=False, stats_url="envoy?target=7"),
+            _Envoy(envoy_id=8, name="PP Envoy (Easy)", spawned=False, stats_url="envoy?target=8"),
+        ]
+
+        logger.info("GOD_MONITOR",
+                    f"[ENVOY AUTO-LOOT] pool {ended_pool} ended — waiting {INITIAL_DELAY//60}m for loot to roll")
+        await asyncio.sleep(INITIAL_DELAY)
+
+        channel = await self._get_alert_channel("envoys") or await self._get_alert_channel("drops")
+        try:
+            settings = db.get_settings()
+            settings["envoy_loot_pool"] = ended_pool  # point drop-fetch at the ended pool
+            db.save_settings(settings)
+        except Exception:
+            pass
+
+        for attempt in range(1, MAX_RETRIES + 2):
+            status = None
+            try:
+                probe = await self.session.get_sse(
+                    f"ajax/timedgod_loot_sse.php?spawnid={ended_pool}&envoyid=3", timeout_secs=30)
+                status = parse_loot_status(probe or "")
+                if status:
+                    logger.info("GOD_MONITOR",
+                                f"[ENVOY AUTO-LOOT] pool {ended_pool}: {status['label']} ({status['status']})")
+                    # Publish rolling status to the dashboard while we wait
+                    try:
+                        settings = db.get_settings()
+                        settings["envoy_loot_status"] = status["label"]
+                        db.save_settings(settings)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning("GOD_MONITOR", f"[ENVOY AUTO-LOOT] status probe failed: {e}")
+
+            if status and status["status"] == 3:  # Loot completed
+                logger.info("GOD_MONITOR", f"[ENVOY AUTO-LOOT] pool {ended_pool} completed — posting winners")
+                if channel:
+                    await channel.send(f"📦 **Envoy loot completed for pool {ended_pool}** — posting winners…")
+                for envoy in envoys:
+                    await self._post_envoy_drops(envoy)
+                if channel:
+                    await channel.send(f"✅ All 8 envoy drops posted for pool **{ended_pool}**.")
+                return
+
+            if attempt <= MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY)
+
+        logger.warning("GOD_MONITOR", f"[ENVOY AUTO-LOOT] pool {ended_pool} never reached 'completed'")
+        if channel:
+            await channel.send(
+                f"⚠️ Auto loot-fetch for pool **{ended_pool}** timed out (still rolling?). "
+                f"Run `!envoy-fetch {ended_pool}` manually once it's done."
+            )
+
     async def _post_envoy_drops(self, envoy):
         from outwar.scraper import parse_prime_god_loot, get_latest_envoy_pool
         import re as _re
@@ -1349,7 +1439,16 @@ class GodMonitor(commands.Cog):
             try:
                 settings = db.get_settings()
                 settings["envoy_loot_pool"] = latest_pool
+                # Clear any stale rolling status — if we can read a leaderboard, the
+                # cycle is live (not mid-roll).
+                settings["envoy_loot_status"] = None
                 db.save_settings(settings)
+                # Push the real pool to the dashboard (fixes the orphaned display).
+                try:
+                    from outwar import status_writer
+                    status_writer.publish_settings_meta(envoy_pool=latest_pool, envoy_status=None)
+                except Exception:
+                    pass
             except Exception:
                 pass
         return embeds, latest_pool

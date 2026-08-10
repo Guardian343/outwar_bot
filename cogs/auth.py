@@ -243,7 +243,8 @@ class AuthCommands(commands.Cog):
                 name = getattr(ch, "name", None)
                 channels[atype] = {"id": str(cid), "name": ("#" + name) if name else str(cid)}
             envoy_last = settings.get("envoy_loot_pool")
-            status_writer.publish_settings_meta(channels, envoy_last)
+            envoy_status = settings.get("envoy_loot_status")
+            status_writer.publish_settings_meta(channels, envoy_last, envoy_status)
         except Exception:
             pass
 

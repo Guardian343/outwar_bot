@@ -61,11 +61,14 @@ Last updated: 2026-08-02
   • Poll method (no inbound exposure). Restart via `deathbot-supervisor` only.
 - [ ] **Uptime monitoring (Uptime Kuma)** `⚡ Easy`
   Watches bot + dashboard, phone alert if either goes down. ~20 min setup, runs on the Pi.
-- [ ] **Dashboard envoy pool display is orphaned** `⚡ Easy` (fold into envoy feature)
-  `status.json` `envoy_pool_last`=49 is stale; `settings.json` `envoy_loot_pool`=50 is correct. NO current
-  code writes `envoy_pool_last` (publish_settings_meta doesn't exist in status_writer; auth.py's call fails
-  silently in try/except). Cosmetic. Fix: write a real publisher, call it when the pool changes (not just
-  on_ready), reconcile "last completed" vs "next" semantics.
+- [x] **Dashboard envoy pool display — FIXED 2026-08-10** ✅
+  Root cause was `status_writer.publish_settings_meta` didn't EXIST (auth.py called it in try/except →
+  silent fail → orphaned envoy_pool_last stuck at 49). NOW: (1) wrote the real `publish_settings_meta` in
+  status_writer (writes settings_meta: channels + envoy_pool_last + envoy_pool_next + envoy_loot_status);
+  (2) leaderboard refresh pushes the REAL pool to the dashboard each run (no hardcode); (3) loot status
+  ("Rolling!", "Loot completed" etc.) published during a roll. ⚠️ CHECK: the dashboard FRONT-END
+  (supervisor repo) must read settings_meta.envoy_pool_last / envoy_loot_status — verify it renders once
+  data arrives (the HTML had envoy_pool_last logic already; confirm status display exists or add it).
 
 ## 🧪 Test & Verify (do these first — directive: test the last ~24h of changes before anything else)
 

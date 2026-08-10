@@ -1083,6 +1083,40 @@ def parse_equipment_page(html: str, item_name: str) -> list[dict]:
     return found
 
 
+def parse_loot_status(data: str) -> dict | None:
+    """Extract the loot roll status from an SSE stream. Status codes (from the game's
+    client JS): 1='Preparing loot', 2='Loot rolling starting soon...', 2.5='Rolling!',
+    3='Loot completed'. Returns {"status": <code>, "label": <text>} for the LAST status
+    message seen (the current state), or None if no status message is present.
+    """
+    import json
+    labels = {
+        1: "Preparing loot",
+        2: "Loot rolling starting soon…",
+        2.5: "Rolling!",
+        3: "Loot completed",
+    }
+    last = None
+    for line in data.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("data: "):
+            line = line[6:]
+        try:
+            event = json.loads(line)
+        except Exception:
+            continue
+        if event.get("messageType") == "status":
+            try:
+                code = float(event.get("status"))
+                code = int(code) if code == int(code) else code  # 3.0 → 3, keep 2.5
+                last = {"status": code, "label": labels.get(code, f"Status {code}")}
+            except Exception:
+                continue
+    return last
+
+
 def parse_prime_god_loot(data: str) -> list[dict]:
     """
     Parse prime god loot from SSE stream (ajax/timedgod_loot_sse.php).
