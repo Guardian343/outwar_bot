@@ -650,10 +650,13 @@ class GroupStatCommands(commands.Cog):
                 crew_caps = parse_crew_cap_status(cap_html)
                 for r in results:
                     entry = crew_caps.get(r["name"])
-                    if entry and entry.get("next_expiry"):
-                        # Only show a next-cap time when the account is actually capped
-                        # (no free caps). If it has caps available, next-cap isn't useful.
-                        r["next_cap"] = entry["next_expiry"] if r.get("cur", 0) <= 0 else "—"
+                    # Show the next-cap time whenever the crew table has one for this
+                    # account. The "Next Expiry" is when their soonest used cap regens —
+                    # meaningful whether they're fully capped or just partially used
+                    # (e.g. 7/10 used still has a next-cap time). Only "—" when they have
+                    # no used caps at all, or aren't in the table.
+                    if entry and entry.get("next_expiry") and entry.get("used", 0) > 0:
+                        r["next_cap"] = entry["next_expiry"]
                     else:
                         r["next_cap"] = "—"
         except Exception:
