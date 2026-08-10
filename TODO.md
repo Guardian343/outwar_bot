@@ -200,12 +200,12 @@ Last updated: 2026-08-02
          `_post_envoy_drops`. Persist `{cycle_end_ts, last_fetched_pool}` to disk → restart-proof +
          self-backfilling (fixes original downtime-miss bug — old trigger watched spawned→despawn but
          envoys never despawn = dead code).
-      3. **Live leaderboards**: 1 embed per envoy (8), edited every 24h, header shows countdown. Data
-         CONFIRMED on `envoy?target=<id>` (Rank|Character|Level|Attacks). **PARSER BUILT 2026-08-xx** ✅ —
-         `parse_envoy_leaderboard(html)` in scraper.py (leaderboard is a CSS grid, not a table: .grid-item
-         divs, 4 headers then players in groups of 4; extracts rank/name/profile_id/level/attacks). Tested
-         against live dump. STILL TO BUILD: the 8 embeds + 24h edit loop + countdown header; at rollover
-         replace with loot winners then fresh boards.
+      3. **Live leaderboards**: **`!envoy leaderboard` (aka board/lb) BUILT 2026-08-xx** ✅ — posts one
+         text-in-embed per envoy (aligned # / Character / Lvl / Atk in a code block, handles long lists),
+         with a "Cycle ends in Xd Yh" header from the countdown timestamp. Also updates the dashboard's
+         stale envoy_loot_pool with the real value while it's at it (fixes the orphaned pool display).
+         STILL TO BUILD: auto-refresh loop (edit the embeds every 24h instead of re-posting — store the 8
+         message IDs, persist to disk); at rollover replace with loot winners then fresh boards.
       • **`parse_envoy_latest_pool(html)` BUILT** ✅ — reads max pool from Spawn History (envoy_loot/<pool>/
          <envoy>) links. Confirms the pool auto-fetch trigger data. NOTE: pool is now **51** (was 50) —
          confirms the Aug 6 cycle DID roll over (we just missed watching it live).
