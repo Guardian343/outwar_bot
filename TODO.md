@@ -3,6 +3,17 @@ Last updated: 2026-08-02
 
 ## 🔴 Critical (Fix Before Next Major Session)
 
+- [ ] **Envoy monitor reads the WRONG page** `🔴 Hard` — surfaced 2026-08-10
+  Envoys live on the **envoy page**, NOT primegods (Liam confirmed). But the monitor feeds
+  `parse_envoys` the `primegods` page (god_monitor.py line 313: `envoys = parse_envoys(html)` where
+  html = primegods). So it finds nothing every poll → "Envoy parse returned nothing" fires constantly,
+  and envoy spawn/death detection is likely NOT working (or unreliable). The built-in `!envoys` command
+  (line ~1285) has the same wrong-page bug. INVESTIGATE + FIX: (1) confirm which page parse_envoys works
+  against (test against the dumped envoy_overview.html / envoy_page.html / envoy_target_1.html), (2) fetch
+  that page for envoy detection instead of reusing the primegods html, (3) verify spawn/death alerts then
+  actually fire. NOTE: the `!envoy leaderboard` command does NOT have this bug — it reads envoy?target=1..8
+  pages directly (where the data lives), bypassing parse_envoys entirely.
+
 - [x] **MD cycle ended early, wasting MD (the real "mixed status" cause)** — FIXED 2026-08-02
   ROOT CAUSE (found after tracing the actual loop, not the display): the inner raid loop broke when a
   **50% MAJORITY** of accounts' MD expired (line ~1164, `majority_expired`), NOT when the last account

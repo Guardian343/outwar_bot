@@ -987,6 +987,16 @@ def parse_envoys(html: str) -> list[Envoy]:
     return envoys
 
 
+def parse_envoy_name(html: str) -> str | None:
+    """Extract the envoy's name from its target page (the .envoy-name div)."""
+    soup = BeautifulSoup(html, "lxml")
+    el = soup.find("div", class_="envoy-name")
+    if el:
+        name = el.get_text(strip=True)
+        return name or None
+    return None
+
+
 def parse_envoy_leaderboard(html: str) -> list[dict]:
     """Parse the Leaderboard from an envoy target page (envoy?target=<id>).
     The leaderboard is a CSS grid, not a table: a .grid-container inside the

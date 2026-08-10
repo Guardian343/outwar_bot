@@ -1216,25 +1216,14 @@ class GodMonitor(commands.Cog):
     @envoy.command(name="leaderboard", aliases=["board", "lb"])
     async def envoy_leaderboard_sub(self, ctx):
         """Post the current leaderboard for each of the 8 envoys (one embed each)."""
-        from outwar.scraper import parse_envoy_leaderboard, parse_envoy_latest_pool
+        from outwar.scraper import (parse_envoy_leaderboard, parse_envoy_latest_pool,
+                                     parse_envoy_name)
         import re as _re, time as _time
 
         status_msg = await ctx.send("⏳ Fetching envoy leaderboards…")
 
-        # Get the current envoy roster (id + name) from the primegods page
-        try:
-            gods_html = await self.session.get("primegods")
-            envoys = parse_envoys(gods_html)
-        except Exception as e:
-            await status_msg.edit(content=f"❌ Could not fetch envoy list: {e}")
-            return
-        if not envoys:
-            await status_msg.edit(content="❌ No envoys found.")
-            return
-
         # Cycle countdown for the header (from envoy_overview)
         countdown_str = ""
-        latest_pool = None
         try:
             overview = await self.session.get("envoy_overview")
             m = _re.search(r"var countdown\s*=\s*(\d{9,11})", overview)
@@ -1247,11 +1236,17 @@ class GodMonitor(commands.Cog):
         except Exception:
             pass
 
+        # Envoy target pages are always target=1..8. Pull each page directly —
+        # no dependency on parse_envoys(primegods), which can be empty when the
+        # envoys aren't listed on the primegods page. Name + leaderboard both
+        # live on the target page itself.
         posted = 0
-        for envoy in envoys:
+        latest_pool = None
+        for target_id in range(1, 9):
             try:
-                page = await self.session.get(f"envoy?target={envoy.envoy_id}")
+                page = await self.session.get(f"envoy?target={target_id}")
                 rows = parse_envoy_leaderboard(page)
+                name = parse_envoy_name(page) or f"Envoy {target_id}"
                 if latest_pool is None:
                     latest_pool = parse_envoy_latest_pool(page)
                 if not rows:
@@ -1262,12 +1257,12 @@ class GodMonitor(commands.Cog):
                     nm = (r["name"] or "")[:19]
                     lines.append(f"{r['rank']:<3}{nm:<20}{r['level']:>4}{r['attacks']:>6}")
                 lines.append("```")
-                header = f"{es.ICON_ENVOY} {envoy.name} — Leaderboard"
+                header = f"{es.ICON_ENVOY} {name} — Leaderboard"
                 desc = (countdown_str + "\n" if countdown_str else "") + "\n".join(lines)
                 await ctx.send(embed=es.info_embed(header, desc))
                 posted += 1
             except Exception as e:
-                logger.warning("GOD_MONITOR", f"Leaderboard fetch failed for envoy {envoy.envoy_id}: {e}")
+                logger.warning("GOD_MONITOR", f"Leaderboard fetch failed for target {target_id}: {e}")
 
         # Update the dashboard's stale pool number while we're here (fixes the
         # orphaned envoy_pool_last — we now have the real value from the page).
