@@ -154,29 +154,30 @@ def mark_ok(discord_id: int):
 # empty-roster signal is exactly how expiry is detected.
 
 _SERVER_HOST = {1: "https://sigil.outwar.com", 2: "https://torax.outwar.com"}
+# support.php lives on the network-wide Rampid host, NOT the per-game-server host.
+# Confirmed working (Freak): rampidgaming.outwar.com/support.php?rg_sess_id=..&support_server=N
+# The page greets "Welcome back, <RGA name>" — the real login name.
+_RAMPID_HOST = "http://rampidgaming.outwar.com"
 
 
 def parse_rga_login(html: str) -> str | None:
-    """Extract the RGA *login* name (e.g. 'Liam234') from an account page, as
-    opposed to a character name. The cleanest, most explicit source is support.php
-    which has a literal 'RG Account Name: <name>' field — tried first. Other patterns
-    are fallbacks. Returns None if none match (caller falls back to first character).
+    """Extract the RGA *login* name (e.g. 'Liam234') from the Rampid support.php
+    page, which greets 'Welcome back, <name>'. Falls back to a couple of label
+    forms; returns None if none match (caller falls back to first character name).
     """
     import re
     patterns = [
-        # support.php — explicit, unambiguous label (preferred). Allow any tags/
-        # whitespace between the label and the name (it's often in adjacent <td>s).
+        r'Welcome back,?\s*(?:<[^>]*>\s*)*([A-Za-z0-9_]+)',   # Rampid greeting
         r'RG Account Name:\s*(?:<[^>]*>\s*)*([A-Za-z0-9_]+)',
-        # fallbacks from other pages
+        r'Account Name:\s*(?:<[^>]*>\s*)*([A-Za-z0-9_]+)',
         r'class=["\']toolbar_username["\'][^>]*>([^<]+)<',
         r'Logged in as[:\s]+([A-Za-z0-9_]+)',
-        r'transnick=([^&"\']+)',
     ]
     for p in patterns:
         m = re.search(p, html or "", re.I)
         if m:
             name = m.group(1).strip()
-            if name:
+            if name and name.lower() not in ("to", "back"):  # guard vs 'Welcome to'
                 return name
     return None
 
@@ -241,8 +242,8 @@ async def fetch_roster(ssid: str, server_id: int = 1) -> list:
 
 async def validate_ssid(ssid: str, server_id: int = 1):
     """
-    Check an SSID by fetching its roster (accounts.php) and the RGA login name
-    (support.php, which has an explicit 'RG Account Name:' field).
+    Check an SSID by fetching its roster (accounts.php on the game host) and the RGA
+    login name (support.php on the RAMPID host, which greets 'Welcome back, <name>').
     Returns (ok: bool, rga_name: str, roster: list).
     rga_name is the RGA *login* name (e.g. 'Liam234') when extractable, else falls
     back to the first character's name.
@@ -250,23 +251,24 @@ async def validate_ssid(ssid: str, server_id: int = 1):
     import aiohttp
     host = _SERVER_HOST.get(int(server_id), _SERVER_HOST[1])
 
-    async def _fetch(path):
+    async def _fetch(url):
         try:
-            url = f"{host}/{path}{'&' if '?' in path else '?'}rg_sess_id={ssid}"
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
                     return await r.text()
         except Exception:
             return ""
 
-    roster_html = await _fetch(f"accounts.php?ac_serverid={int(server_id)}")
+    roster_html = await _fetch(f"{host}/accounts.php?ac_serverid={int(server_id)}&rg_sess_id={ssid}")
     roster = parse_roster(roster_html)
     if not roster:
         return False, "", []
 
-    # Real login name from support.php (explicit 'RG Account Name:' field); if that
-    # page/pattern fails, try the roster page, then fall back to the first character.
-    login = parse_rga_login(await _fetch("support.php")) \
+    # Real login name from the Rampid support.php ("Welcome back, <name>"). support.php
+    # lives on rampidgaming.outwar.com (NOT the game host) and uses support_server.
+    support_html = await _fetch(
+        f"{_RAMPID_HOST}/support.php?rg_sess_id={ssid}&support_server={int(server_id)}")
+    login = parse_rga_login(support_html) \
         or parse_rga_login(roster_html) \
         or roster[0]["name"]
     return True, login, roster
