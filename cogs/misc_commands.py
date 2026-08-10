@@ -84,9 +84,17 @@ class MiscCommands(commands.Cog):
         name one: !caps-debug SomeName"""
         import os
         try:
-            LOD = db.CREW_ALIASES.get("lod", "†Legion of Death†")
+            # Match the crew flexibly: trustees store the PLAIN name ('Legion of Death'),
+            # while CREW_ALIASES may carry decorative symbols (†...†). Compare the core
+            # alphanumeric text so daggers/stars/encoding don't cause a miss.
+            import re as _re0
+            def _norm(s):
+                return _re0.sub(r"[^a-z0-9]", "", (s or "").lower())
+            lod_alias = db.CREW_ALIASES.get("lod", "Legion of Death")
+            lod_key = _norm(lod_alias) or _norm("Legion of Death")
             trustees = db.get_trustees()
-            in_crew = [t for t in trustees if t.get("crew", "") == LOD]
+            in_crew = [t for t in trustees if _norm(t.get("crew", "")) == lod_key]
+            LOD = "Legion of Death"
             chosen = None
             if account:
                 chosen = next((t for t in trustees
