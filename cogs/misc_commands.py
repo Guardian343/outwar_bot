@@ -75,22 +75,64 @@ class MiscCommands(commands.Cog):
     # display is built into !pcaps.
     # ------------------------------------------------------------------
     @commands.command(name="caps-debug", hidden=True)
-    async def caps_debug(self, ctx):
-        """TEMP: dump the home page HTML to the Pi to inspect cap expiry data."""
+    async def caps_debug(self, ctx, account: str = None):
+        """TEMP: dump crew_capstatus AS an account that's actually IN the crew, via the
+        bot's safe sess_get. Auto-picks the first LoD trustee (or name one). crew_capstatus
+        needs an in-crew account — LoDRaid isn't in the crew, so we use a real member."""
         import os
-        out_dir = os.path.expanduser("~")
+        from outwar import ssid_store as store
         try:
-            html = await self.session.get("home")
-            fp = os.path.join(out_dir, "home_page.html")
+            LOD = db.CREW_ALIASES.get("lod", "†Legion of Death†")
+            trustees = db.get_trustees()
+            in_crew = [t for t in trustees if t.get("crew", "") == LOD]
+            chosen = None
+            if account:
+                chosen = next((t for t in trustees
+                               if t.get("name", "").lower() == account.lower()), None)
+            if not chosen:
+                chosen = in_crew[0] if in_crew else None
+            if not chosen:
+                await ctx.send(f"❌ No trustee found in **{LOD}** to fetch as. "
+                               f"({len(trustees)} trustees, {len(in_crew)} in crew.)")
+                return
+            suid = str(chosen.get("suid") or "")
+            name = chosen.get("name", suid)
+            if not suid:
+                await ctx.send(f"❌ Trustee **{name}** has no suid stored.")
+                return
+
+            # Find the stored SSID that OWNS this suid (sess_get needs the RGA's SSID).
+            ssid, server_id = None, 1
+            for _did, e in store.all_entries().items():
+                roster = await store.fetch_roster(e.get("ssid", ""), e.get("server_id", 1))
+                if any(str(r.get("suid")) == suid for r in roster):
+                    ssid = e.get("ssid")
+                    server_id = e.get("server_id", 1)
+                    break
+            if not ssid:
+                await ctx.send(f"❌ No stored SSID owns suid {suid} ({name}). "
+                               f"Add the RGA holding this account with `!sess add`.")
+                return
+
+            html = await store.sess_get("crew_capstatus", ssid, suid, server_id)
+            fp = os.path.join(os.path.expanduser("~"), "crew_capstatus.html")
             with open(fp, "w", encoding="utf-8") as f:
                 f.write(html)
-            # Also surface anything cap/time-related inline for a quick look
+
             import re as _re
-            hints = _re.findall(r".{0,40}(?:God Cap|cap|reset|expire|refresh).{0,60}", html, _re.IGNORECASE)[:8]
-            hint_txt = "\n".join(h.strip() for h in hints) if hints else "(no obvious cap/time text found inline)"
+            title = _re.search(r"<title>([^<]*)</title>", html, _re.I)
+            title_txt = title.group(1).strip() if title else "(no title)"
+            hints = []
+            for pat in [r".{0,25}\d{1,2}:\d{2}(:\d{2})?.{0,25}",
+                        r".{0,25}\d+\s*(day|hour|hr|min).{0,25}",
+                        r".{0,35}(expire|reset|remaining|available|free|cap).{0,35}"]:
+                hints += [m.group(0).strip() for m in _re.finditer(pat, html, _re.I)][:4]
+            hint_txt = "\n".join(dict.fromkeys(hints))[:1500] if hints else "(no obvious expiry text)"
             await ctx.send(
-                f"**Caps debug dump:**\n✅ `home` → `~/home_page.html` ({len(html):,} bytes)\n"
-                f"Quick hints (first matches):\n```\n{hint_txt[:1500]}\n```"
+                f"**caps-debug** as **{name}** (suid {suid}, in {LOD}):\n"
+                f"✅ `crew_capstatus` → `~/crew_capstatus.html` ({len(html):,} bytes)\n"
+                f"Title: `{title_txt}`\n"
+                f"Hints:\n```\n{hint_txt}\n```"
             )
         except Exception as e:
             await ctx.send(f"❌ caps-debug failed: {e}")
