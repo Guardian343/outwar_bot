@@ -207,8 +207,11 @@ Last updated: 2026-08-02
 - [ ] **Envoy cycle feature** `🔴 Hard` — **build at Aug 6 rollover (~17:30 UTC)**
       Cycle ends 2026-08-06 17:30 UTC (`var countdown = <unix>` on envoy_overview, currently 1786037400).
       Three sub-features, all share the cycle lifecycle:
-      1. **Cycle alerts** (timestamp-based): "1 day left", "new cycle started", configurable thresholds +
-         channel. Buildable anytime (doesn't need rollover).
+      1. **Cycle alerts** (timestamp-based): **BUILT 2026-08-10** ✅ — countdown alerts at **1d** and **1h**
+         to the envoys channel. DELETE + REPOST at each threshold (so it NOTIFIES people, but only one
+         countdown alert lives in the channel at a time — no clutter). Each threshold fires once per cycle;
+         state persists (envoy_alert_fired) so a restart won't re-fire a passed one; resets on rollover.
+         Hooked into the existing rollover check (which already reads the countdown ts each poll).
       2. **Auto-fetch** (pool-increment based): watch `/envoy_loot/<pool>/<envoy>` history (shared pool,
          increments by 1, currently 50). If latest_pool > last_fetched_pool → fetch all 8 via existing
          `_post_envoy_drops`. Persist `{cycle_end_ts, last_fetched_pool}` to disk → restart-proof +
@@ -220,12 +223,11 @@ Last updated: 2026-08-02
          stale envoy_loot_pool with the real value while it's at it (fixes the orphaned pool display).
          STILL TO BUILD: at rollover replace with loot winners then fresh boards (needs Aug 20 observation).
          **AUTO-REFRESH BUILT 2026-08-10** ✅ — `!envoy autoboard start|stop|refresh|status`. Posts the 8
-         embeds to the **envoys** alert channel (same channel as envoy alerts), edits them IN PLACE on a
-         daily schedule. Timing is ANCHORED to the envoy reset (17:30 UK, in `_leaderboard_refresh_hour/
-         minute`), NOT 24h-from-start — so the daily refresh is consistent and the last refresh of a cycle
-         lands near the rollover for an accurate final board. Message IDs persist in settings
-         (envoy_leaderboard_msgs) → restart-proof; loop auto-resumes on startup if IDs exist. If a tracked
-         message is deleted it reposts just that one.
+         embeds to the **envoys** alert channel (same channel as envoy alerts), edits them IN PLACE.
+         Refreshes **4×/day at 17:15 / 23:15 / 05:15 / 11:15 UK** (6h apart, one landing just before the
+         ~17:30 reset for an accurate final board). In `_leaderboard_refresh_hours` + `_minute`. Message IDs
+         persist in settings (envoy_leaderboard_msgs) → restart-proof; loop auto-resumes on startup if IDs
+         exist. If a tracked message is deleted it reposts just that one.
          ENVOY NAMES (Liam, confirmed, all distinct — no dupes): **MOB, PVP, RAID, ALVAR, DELRUK, VORDYN,
          PP (HARD), PP (EASY)**. Header currently uses the `envoy-title` div (showed "Mob Envoy" on target 1).
          VERIFY on next run: do all 8 titles read sensibly + do target IDs 1..8 map to these names in order?

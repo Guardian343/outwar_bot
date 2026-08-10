@@ -108,10 +108,15 @@ class GodMonitor(commands.Cog):
         self._monitor_running = False
         self._last_god_poll = None  # tracks last half-hour window polled
         self._envoy_cycle_end_ts = None  # last-seen envoy cycle-end unix ts (rollover detection)
-        # Envoy leaderboard auto-refresh: anchored to the envoy cycle reset (~17:30 UK)
-        self._leaderboard_refresh_hour = 17
-        self._leaderboard_refresh_minute = 30
+        # Envoy leaderboard auto-refresh: 4×/day at :15 past, 6h apart, one landing
+        # at 17:15 UK just before the ~17:30 envoy reset.
+        self._leaderboard_refresh_hours = {17, 23, 5, 11}
+        self._leaderboard_refresh_minute = 15
         self._last_leaderboard_refresh = None
+        # Envoy countdown alerts: fire once per cycle at these thresholds (delete +
+        # repost so it notifies without cluttering). Tracks which fired this cycle.
+        self._envoy_alert_thresholds = [("1d", 86400), ("1h", 3600)]
+        self._envoy_alert_msg_id = None
 
     @property
     def session(self):
@@ -391,6 +396,53 @@ class GodMonitor(commands.Cog):
                     )
             except Exception:
                 pass
+
+        # --- Countdown alerts (1d / 1h) — delete + repost so they notify without
+        # cluttering. Each threshold fires once per cycle; state persists so a
+        # restart doesn't re-fire an already-passed one. On rollover, reset. ---
+        try:
+            settings = db.get_settings()
+            fired = settings.get("envoy_alert_fired", {})  # {cycle_end_ts: [labels]}
+            cycle_key = str(current_ts)
+            # New cycle → clear old fired records (keep only this cycle's)
+            if cycle_key not in fired:
+                fired = {cycle_key: []}
+            secs_left = current_ts - int(_time.time())
+            for label, threshold in self._envoy_alert_thresholds:
+                # Fire when we're at/under the threshold but not yet past the cycle end,
+                # and haven't already fired this label this cycle.
+                if 0 < secs_left <= threshold and label not in fired[cycle_key]:
+                    channel = await self._get_alert_channel("envoys")
+                    if channel:
+                        # Delete the previous countdown alert (if any) to avoid clutter
+                        if self._envoy_alert_msg_id:
+                            try:
+                                old = await channel.fetch_message(self._envoy_alert_msg_id)
+                                await old.delete()
+                            except Exception:
+                                pass
+                        # Human-friendly remaining time
+                        d, rem = divmod(secs_left, 86400)
+                        h, _r = divmod(rem, 3600)
+                        mins, _s = divmod(_r, 60)
+                        if d > 0:
+                            left = f"{d}d {h}h"
+                        elif h > 0:
+                            left = f"{h}h {mins}m"
+                        else:
+                            left = f"{mins}m"
+                        urgency = "⚠️ " if threshold <= 3600 else ""
+                        msg = await channel.send(
+                            f"{urgency}{es.ICON_ENVOY} **Envoys end in {left}!** "
+                            f"Get your attacks in before the cycle resets."
+                        )
+                        self._envoy_alert_msg_id = msg.id
+                        fired[cycle_key].append(label)
+                    break  # only fire one threshold per poll
+            settings["envoy_alert_fired"] = fired
+            db.save_settings(settings)
+        except Exception as e:
+            logger.warning("GOD_MONITOR", f"Envoy countdown alert error: {e}")
 
         # Persist the current timestamp (whether it changed or not)
         if current_ts != prev:
@@ -1351,9 +1403,10 @@ class GodMonitor(commands.Cog):
             await self._post_or_refresh_leaderboards(force_repost=True)
             if not self.leaderboard_refresh_loop.is_running():
                 self.leaderboard_refresh_loop.start()
-            hh = f"{self._leaderboard_refresh_hour:02d}:{self._leaderboard_refresh_minute:02d}"
-            await ctx.send(f"✅ Auto-leaderboards started — refreshes daily at **{hh} UK** "
-                           f"(aligned to the envoy reset).")
+            hrs = ", ".join(f"{h:02d}:{self._leaderboard_refresh_minute:02d}"
+                            for h in sorted(self._leaderboard_refresh_hours))
+            await ctx.send(f"✅ Auto-leaderboards started — refreshes at **{hrs} UK** "
+                           f"(every 6h, one just before the envoy reset).")
         elif action == "stop":
             if self.leaderboard_refresh_loop.is_running():
                 self.leaderboard_refresh_loop.cancel()
@@ -1366,19 +1419,21 @@ class GodMonitor(commands.Cog):
             running = self.leaderboard_refresh_loop.is_running()
             ids = db.get_settings().get("envoy_leaderboard_msgs", {})
             total = sum(len(v) for v in ids.values())
-            hh = f"{self._leaderboard_refresh_hour:02d}:{self._leaderboard_refresh_minute:02d}"
+            hrs = ", ".join(f"{h:02d}:{self._leaderboard_refresh_minute:02d}"
+                            for h in sorted(self._leaderboard_refresh_hours))
             await ctx.send(f"Auto-leaderboard: {'🟢 running' if running else '🔴 stopped'} — "
-                           f"{total} tracked message(s), daily refresh at **{hh} UK**.")
+                           f"{total} tracked message(s), refreshes at **{hrs} UK**.")
 
     @tasks.loop(minutes=1)
     async def leaderboard_refresh_loop(self):
-        # Fire once a day at a time anchored to the envoy cycle reset (~17:30 UK),
-        # not 24h-from-start. Keeps the daily update consistent and lands the last
-        # refresh of a cycle near the rollover for an accurate final leaderboard.
+        # Refresh 4×/day at :15 past the hour, on a 6-hour cadence anchored so one
+        # always lands at 17:15 UK — just before the ~17:30 envoy reset, capturing an
+        # accurate final board while the cycle is still live. Edits in place (no notify).
         import pytz
         now_uk = datetime.now(pytz.timezone("Europe/London"))
-        if not (now_uk.hour == self._leaderboard_refresh_hour and
-                now_uk.minute == self._leaderboard_refresh_minute):
+        if now_uk.minute != self._leaderboard_refresh_minute:
+            return
+        if now_uk.hour not in self._leaderboard_refresh_hours:
             return
         stamp = now_uk.strftime("%Y-%m-%d %H:%M")
         if self._last_leaderboard_refresh == stamp:
@@ -1386,7 +1441,7 @@ class GodMonitor(commands.Cog):
         self._last_leaderboard_refresh = stamp
         try:
             await self._post_or_refresh_leaderboards(force_repost=False)
-            logger.info("GOD_MONITOR", "Envoy leaderboards auto-refreshed (daily)")
+            logger.info("GOD_MONITOR", "Envoy leaderboards auto-refreshed")
         except Exception as e:
             logger.warning("GOD_MONITOR", f"Leaderboard refresh error: {e}")
 
