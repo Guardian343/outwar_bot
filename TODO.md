@@ -126,27 +126,8 @@ Last updated: 2026-08-02
   Before boss raids, scan group backpacks and alert if a required pot is missing on more than X accounts.
 - [ ] **`!leaderboard`** `⚡ Easy`
   Top characters by power/ele/chaos as an image table.
-- [ ] **Cap expiry / reset time in `!pcaps`** `🟡 Medium` (investigation-ready)
-  Liam wants `!pcaps` to show WHEN caps free up per character.
-  KEY MECHANIC (Liam): each cap expires on an INDEPENDENT **7-day timer from the minute it's used**. So a
-  char who used 6 caps has 6 different expiry times — caps free up ONE AT A TIME as each 7-day timer ends.
-  → Most useful display = "next cap free in Xh" = the SOONEST-expiring of that char's used caps (tells you
-    when you can next raid that character). Optionally colour it.
-  Currently `parse_god_cap` only extracts `God Cap: 6/10` from the `home` page — ignores any expiry data.
-  DECISION (FINAL — Liam): cap expiry MUST be pulled from the Outwar page, NEVER bot-sourced/self-tracked.
-  Reasons: (1) Liam may raid a character manually, which bot-tracking wouldn't capture; (2) the site is the
-  single source of truth — no ambiguity, no mislogged/drifted data. Same principle as "read the real signal"
-  used elsewhere (loot-completed status, god-room crawl lookup). Do NOT implement a bot-side use-time tracker.
-  Currently `parse_god_cap` only extracts `God Cap: 6/10` from the `home` page — ignores any expiry data.
-  UNKNOWN until we see the page: does it show per-cap expiry / countdowns, and where/what format?
-  Added temporary `!caps-debug` (owner-only, hidden, misc_commands.py) → dumps `home` → ~/home_page.html +
-  surfaces cap/time text inline. NEXT: run it, paste the cap section, build parser + display, remove debug.
-  (Separate/related: the older "Cap reset notifications" idea — post to channel when accounts free up —
-  could build on the same parsed expiry data.)
-
 - [ ] **Cap reset notifications** `⚡ Easy`
   Post to channel when LoD accounts are ready to raid Prime Gods again after the daily cap reset.
-  (Builds on the cap-expiry parsing above.)
 - [ ] **Loot-completion polling (best practice)** `🟡 Medium`
   Replace the fixed `await asyncio.sleep(15)` before reading a boss stats page for drops with polling for
   the page's real "Status: Loot completed" flag. Self-adjusts to pool size — fixes the event-boss slow-roll
@@ -222,9 +203,12 @@ Last updated: 2026-08-02
       3. **Live leaderboards**: 1 embed per envoy (8), edited every 24h, header shows countdown. Data
          CONFIRMED on `envoy?target=<id>` (Rank|Character|Level|Attacks). At rollover: replace with loot
          winners, then fresh leaderboards.
-      • **Build FIRST (before Aug 6): auto-dump on rollover** — extend `!envoy-debug` to fire automatically
-        when the timestamp jumps, save before/after HTML to Pi (Liam is at work when it rolls). Fallback:
-        cron dump every ~2h around Aug 6.
+      • **Auto-dump on rollover: BUILT 2026-08-xx** ✅ — `_check_envoy_rollover` in god_monitor.py watches
+        the envoy_overview cycle-end timestamp each poll; when it jumps forward (rollover), auto-dumps
+        overview + all 8 target pages to `~/envoy_rollover_<stamp>_*.html` and posts a channel alert.
+        Persists last-seen ts to `database/envoy_cycle.json` (restart-proof). Isolated in its own try/except
+        so it can't disturb the monitor. NOTE: we MISSED the Aug 6 rollover (auto-dump wasn't built in time)
+        — this ensures the NEXT one (~Aug 20) is captured even if Liam is away.
       • **Loot-completion polling** (see Quick Wins / best-practice): use the page's "Status: Loot completed"
         flag instead of a fixed wait, so large pools (envoys, event bosses) finish before parsing.
       • OPEN (check AT rollover): does pool 51 appear in history the moment it's fetchable, or early while

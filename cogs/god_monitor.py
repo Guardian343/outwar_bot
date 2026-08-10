@@ -107,6 +107,7 @@ class GodMonitor(commands.Cog):
         self._envoys_cache: list = []
         self._monitor_running = False
         self._last_god_poll = None  # tracks last half-hour window polled
+        self._envoy_cycle_end_ts = None  # last-seen envoy cycle-end unix ts (rollover detection)
 
     @property
     def session(self):
@@ -315,8 +316,78 @@ class GodMonitor(commands.Cog):
             status_writer.publish_gods(gods)  # dashboard: live god roster + HP
             await self._process_god_changes(gods)
             await self._process_envoy_changes(envoys)
+            # Rollover auto-capture (isolated — never disturbs the monitor above).
+            try:
+                await self._check_envoy_rollover()
+            except Exception as e:
+                logger.warning("GOD_MONITOR", f"Envoy rollover check error: {e}")
         except Exception as e:
             logger.warning("GOD_MONITOR", f"God monitor poll error: {e}")
+
+    async def _check_envoy_rollover(self):
+        """Detect an envoy cycle rollover by watching the cycle-end timestamp on
+        envoy_overview (var countdown = <unix> - ...). When it jumps forward, the
+        cycle has rolled — auto-dump the envoy pages (before we have a live parser)
+        so Liam can inspect the transition later, even if he's away when it happens.
+        Fully self-contained; persists last-seen ts to disk so a restart won't miss it.
+        """
+        import os, re as _re, json as _json, time as _time
+        state_path = os.path.join(os.path.dirname(__file__), "..", "database", "envoy_cycle.json")
+
+        # Load persisted last-seen timestamp on first run
+        if self._envoy_cycle_end_ts is None:
+            try:
+                with open(state_path, "r", encoding="utf-8") as f:
+                    self._envoy_cycle_end_ts = _json.load(f).get("cycle_end_ts")
+            except Exception:
+                self._envoy_cycle_end_ts = None
+
+        html = await self.session.get("envoy_overview")
+        m = _re.search(r"var countdown\s*=\s*(\d{9,11})", html)
+        if not m:
+            return  # no timestamp found — page format changed or load failed; skip
+        current_ts = int(m.group(1))
+
+        prev = self._envoy_cycle_end_ts
+        # Rollover = the cycle-end timestamp jumped FORWARD (new cycle started).
+        # Use a small threshold to ignore noise; a real roll jumps ~2 weeks.
+        if prev is not None and current_ts > prev + 3600:
+            logger.info("GOD_MONITOR", f"[ENVOY ROLLOVER] cycle-end jumped {prev} → {current_ts} — auto-dumping pages")
+            out_dir = os.path.expanduser("~")
+            stamp = _time.strftime("%Y%m%d_%H%M%S")
+            # Dump overview + all 8 envoy target pages for the post-rollover state
+            pages = {"overview": "envoy_overview"}
+            for i in range(1, 9):
+                pages[f"target{i}"] = f"envoy?target={i}"
+            saved = []
+            for label, path in pages.items():
+                try:
+                    page_html = await self.session.get(path)
+                    fp = os.path.join(out_dir, f"envoy_rollover_{stamp}_{label}.html")
+                    with open(fp, "w", encoding="utf-8") as f:
+                        f.write(page_html)
+                    saved.append(label)
+                except Exception as e:
+                    logger.warning("GOD_MONITOR", f"[ENVOY ROLLOVER] dump {label} failed: {e}")
+            # Alert the channel so Liam knows dumps are waiting
+            try:
+                channel = await self._get_alert_channel("envoys") or await self._get_alert_channel("gods")
+                if channel:
+                    await channel.send(
+                        f"🔔 **Envoy cycle rolled over!** Auto-dumped {len(saved)} pages to the Pi "
+                        f"(`~/envoy_rollover_{stamp}_*.html`) for review. New cycle underway."
+                    )
+            except Exception:
+                pass
+
+        # Persist the current timestamp (whether it changed or not)
+        if current_ts != prev:
+            self._envoy_cycle_end_ts = current_ts
+            try:
+                with open(state_path, "w", encoding="utf-8") as f:
+                    _json.dump({"cycle_end_ts": current_ts}, f)
+            except Exception as e:
+                logger.warning("GOD_MONITOR", f"[ENVOY ROLLOVER] could not persist state: {e}")
 
     async def _poll_bosses(self):
         try:
