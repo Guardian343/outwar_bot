@@ -76,11 +76,13 @@ class MiscCommands(commands.Cog):
     # ------------------------------------------------------------------
     @commands.command(name="caps-debug", hidden=True)
     async def caps_debug(self, ctx, account: str = None):
-        """TEMP: dump crew_capstatus AS an account that's actually IN the crew, via the
-        bot's safe sess_get. Auto-picks the first LoD trustee (or name one). crew_capstatus
-        needs an in-crew account — LoDRaid isn't in the crew, so we use a real member."""
+        """TEMP: dump crew_capstatus by acting as a TRUSTEE character via the bot's own
+        session (get_as → ow_userid cookie = 'select this character'). crew_capstatus
+        shows the crew of whatever character is active, so acting as any character in a
+        crew reveals that crew's caps. NEVER touches a stored account's session — uses
+        only the bot's own login + trusteed characters. Auto-picks a LoD trustee, or
+        name one: !caps-debug SomeName"""
         import os
-        from outwar import ssid_store as store
         try:
             LOD = db.CREW_ALIASES.get("lod", "†Legion of Death†")
             trustees = db.get_trustees()
@@ -92,7 +94,7 @@ class MiscCommands(commands.Cog):
             if not chosen:
                 chosen = in_crew[0] if in_crew else None
             if not chosen:
-                await ctx.send(f"❌ No trustee found in **{LOD}** to fetch as. "
+                await ctx.send(f"❌ No trustee found in **{LOD}**. "
                                f"({len(trustees)} trustees, {len(in_crew)} in crew.)")
                 return
             suid = str(chosen.get("suid") or "")
@@ -101,20 +103,9 @@ class MiscCommands(commands.Cog):
                 await ctx.send(f"❌ Trustee **{name}** has no suid stored.")
                 return
 
-            # Find the stored SSID that OWNS this suid (sess_get needs the RGA's SSID).
-            ssid, server_id = None, 1
-            for _did, e in store.all_entries().items():
-                roster = await store.fetch_roster(e.get("ssid", ""), e.get("server_id", 1))
-                if any(str(r.get("suid")) == suid for r in roster):
-                    ssid = e.get("ssid")
-                    server_id = e.get("server_id", 1)
-                    break
-            if not ssid:
-                await ctx.send(f"❌ No stored SSID owns suid {suid} ({name}). "
-                               f"Add the RGA holding this account with `!sess add`.")
-                return
-
-            html = await store.sess_get("crew_capstatus", ssid, suid, server_id)
+            # Act as this trustee character via the bot's OWN session (get_as sets the
+            # ow_userid cookie = 'play as'). No stored SSID touched.
+            html = await self.session.get_as("crew_capstatus", int(suid))
             fp = os.path.join(os.path.expanduser("~"), "crew_capstatus.html")
             with open(fp, "w", encoding="utf-8") as f:
                 f.write(html)
@@ -122,15 +113,17 @@ class MiscCommands(commands.Cog):
             import re as _re
             title = _re.search(r"<title>([^<]*)</title>", html, _re.I)
             title_txt = title.group(1).strip() if title else "(no title)"
+            is_caps = bool(_re.search(r"cap\s*status|god\s*cap|caps?\s*(used|remaining|left)", html, _re.I))
             hints = []
             for pat in [r".{0,25}\d{1,2}:\d{2}(:\d{2})?.{0,25}",
                         r".{0,25}\d+\s*(day|hour|hr|min).{0,25}",
                         r".{0,35}(expire|reset|remaining|available|free|cap).{0,35}"]:
                 hints += [m.group(0).strip() for m in _re.finditer(pat, html, _re.I)][:4]
-            hint_txt = "\n".join(dict.fromkeys(hints))[:1500] if hints else "(no obvious expiry text)"
+            hint_txt = "\n".join(dict.fromkeys(hints))[:1400] if hints else "(no obvious expiry text)"
             await ctx.send(
-                f"**caps-debug** as **{name}** (suid {suid}, in {LOD}):\n"
-                f"✅ `crew_capstatus` → `~/crew_capstatus.html` ({len(html):,} bytes)\n"
+                f"**caps-debug** as trustee **{name}** (suid {suid}):\n"
+                f"{'✅ CAPS PAGE' if is_caps else '⚠️ not the caps page'} — "
+                f"`crew_capstatus` → `~/crew_capstatus.html` ({len(html):,} bytes)\n"
                 f"Title: `{title_txt}`\n"
                 f"Hints:\n```\n{hint_txt}\n```"
             )
