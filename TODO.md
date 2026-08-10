@@ -126,8 +126,27 @@ Last updated: 2026-08-02
   Before boss raids, scan group backpacks and alert if a required pot is missing on more than X accounts.
 - [ ] **`!leaderboard`** `⚡ Easy`
   Top characters by power/ele/chaos as an image table.
+- [ ] **Cap expiry / reset time in `!pcaps`** `🟡 Medium` (investigation-ready)
+  Liam wants `!pcaps` to show WHEN caps free up per character.
+  KEY MECHANIC (Liam): each cap expires on an INDEPENDENT **7-day timer from the minute it's used**. So a
+  char who used 6 caps has 6 different expiry times — caps free up ONE AT A TIME as each 7-day timer ends.
+  → Most useful display = "next cap free in Xh" = the SOONEST-expiring of that char's used caps (tells you
+    when you can next raid that character). Optionally colour it.
+  Currently `parse_god_cap` only extracts `God Cap: 6/10` from the `home` page — ignores any expiry data.
+  DECISION (FINAL — Liam): cap expiry MUST be pulled from the Outwar page, NEVER bot-sourced/self-tracked.
+  Reasons: (1) Liam may raid a character manually, which bot-tracking wouldn't capture; (2) the site is the
+  single source of truth — no ambiguity, no mislogged/drifted data. Same principle as "read the real signal"
+  used elsewhere (loot-completed status, god-room crawl lookup). Do NOT implement a bot-side use-time tracker.
+  Currently `parse_god_cap` only extracts `God Cap: 6/10` from the `home` page — ignores any expiry data.
+  UNKNOWN until we see the page: does it show per-cap expiry / countdowns, and where/what format?
+  Added temporary `!caps-debug` (owner-only, hidden, misc_commands.py) → dumps `home` → ~/home_page.html +
+  surfaces cap/time text inline. NEXT: run it, paste the cap section, build parser + display, remove debug.
+  (Separate/related: the older "Cap reset notifications" idea — post to channel when accounts free up —
+  could build on the same parsed expiry data.)
+
 - [ ] **Cap reset notifications** `⚡ Easy`
   Post to channel when LoD accounts are ready to raid Prime Gods again after the daily cap reset.
+  (Builds on the cap-expiry parsing above.)
 - [ ] **Loot-completion polling (best practice)** `🟡 Medium`
   Replace the fixed `await asyncio.sleep(15)` before reading a boss stats page for drops with polling for
   the page's real "Status: Loot completed" flag. Self-adjusts to pool size — fixes the event-boss slow-roll

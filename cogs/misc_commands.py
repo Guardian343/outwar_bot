@@ -70,6 +70,32 @@ class MiscCommands(commands.Cog):
         await ctx.send("**Envoy debug dump:**\n" + "\n".join(results))
 
     # ------------------------------------------------------------------
+    # TEMPORARY DEBUG — dump the home page (where God Cap lives) to inspect
+    # whether cap expiry/reset timings are present. Remove once cap-expiry
+    # display is built into !pcaps.
+    # ------------------------------------------------------------------
+    @commands.command(name="caps-debug", hidden=True)
+    async def caps_debug(self, ctx):
+        """TEMP: dump the home page HTML to the Pi to inspect cap expiry data."""
+        import os
+        out_dir = os.path.expanduser("~")
+        try:
+            html = await self.session.get("home")
+            fp = os.path.join(out_dir, "home_page.html")
+            with open(fp, "w", encoding="utf-8") as f:
+                f.write(html)
+            # Also surface anything cap/time-related inline for a quick look
+            import re as _re
+            hints = _re.findall(r".{0,40}(?:God Cap|cap|reset|expire|refresh).{0,60}", html, _re.IGNORECASE)[:8]
+            hint_txt = "\n".join(h.strip() for h in hints) if hints else "(no obvious cap/time text found inline)"
+            await ctx.send(
+                f"**Caps debug dump:**\n✅ `home` → `~/home_page.html` ({len(html):,} bytes)\n"
+                f"Quick hints (first matches):\n```\n{hint_txt[:1500]}\n```"
+            )
+        except Exception as e:
+            await ctx.send(f"❌ caps-debug failed: {e}")
+
+    # ------------------------------------------------------------------
     # !check-item
     # ------------------------------------------------------------------
 
