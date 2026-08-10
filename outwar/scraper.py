@@ -988,7 +988,20 @@ def parse_envoys(html: str) -> list[Envoy]:
 
 
 def parse_envoy_name(html: str) -> str | None:
-    """Extract the envoy's name from its target page (the .envoy-name div)."""
+    """Extract the envoy's name from its target page. The envoy's actual name is
+    in the .envoy-title div (e.g. 'Mob Envoy'). NOTE: the .envoy-name div is NOT
+    the envoy name — it's the account chosen to receive the buff each cycle.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    el = soup.find("div", class_="envoy-title")
+    if el:
+        name = el.get_text(strip=True)
+        return name or None
+    return None
+
+
+def parse_envoy_buff_account(html: str) -> str | None:
+    """Extract the account chosen to receive this envoy's buff (the .envoy-name div)."""
     soup = BeautifulSoup(html, "lxml")
     el = soup.find("div", class_="envoy-name")
     if el:

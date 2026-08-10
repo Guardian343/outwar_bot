@@ -3,16 +3,19 @@ Last updated: 2026-08-02
 
 ## 🔴 Critical (Fix Before Next Major Session)
 
-- [ ] **Envoy monitor reads the WRONG page** `🔴 Hard` — surfaced 2026-08-10
-  Envoys live on the **envoy page**, NOT primegods (Liam confirmed). But the monitor feeds
-  `parse_envoys` the `primegods` page (god_monitor.py line 313: `envoys = parse_envoys(html)` where
-  html = primegods). So it finds nothing every poll → "Envoy parse returned nothing" fires constantly,
-  and envoy spawn/death detection is likely NOT working (or unreliable). The built-in `!envoys` command
-  (line ~1285) has the same wrong-page bug. INVESTIGATE + FIX: (1) confirm which page parse_envoys works
-  against (test against the dumped envoy_overview.html / envoy_page.html / envoy_target_1.html), (2) fetch
-  that page for envoy detection instead of reusing the primegods html, (3) verify spawn/death alerts then
-  actually fire. NOTE: the `!envoy leaderboard` command does NOT have this bug — it reads envoy?target=1..8
-  pages directly (where the data lives), bypassing parse_envoys entirely.
+- [ ] **`parse_envoys` doesn't match envoy pages at all** `🔴 Hard` — surfaced 2026-08-10
+  TESTED: `parse_envoys` returns 0 on ALL envoy pages (envoy_overview.html, envoy_page.html,
+  envoy_target_1.html). Its selectors (mobid=/target= links + onmouseover names) are built for the
+  PRIMEGODS layout, not the envoy pages. Envoys have NEVER lived on primegods (Liam: gave the envoy page
+  URL at the start). So the monitor's `envoys = parse_envoys(primegods_html)` (line 313) was always empty
+  → "Envoy parse returned nothing" every poll → envoy spawn/death detection via this path never worked.
+  KEY INSIGHT: the envoy feature does NOT need parse_envoys — everything comes from the target pages:
+  leaderboard (parse_envoy_leaderboard ✅), name (parse_envoy_name ✅), pool (parse_envoy_latest_pool ✅),
+  countdown/spawn (var countdown ✅) — all built + tested against real dumps. So BUILD the envoy feature on
+  the target-page parsers; treat old parse_envoys + its monitor usage as separate cleanup (either rewrite
+  it for the real envoy page structure, or remove it and route envoy detection through the target pages).
+  ACTION: get a proper look at how envoy spawn state SHOULD be detected (target pages? overview?) and
+  rebuild that path; the current parse_envoys is effectively dead for envoys.
 
 - [x] **MD cycle ended early, wasting MD (the real "mixed status" cause)** — FIXED 2026-08-02
   ROOT CAUSE (found after tracing the actual loop, not the display): the inner raid loop broke when a
@@ -217,6 +220,12 @@ Last updated: 2026-08-02
          stale envoy_loot_pool with the real value while it's at it (fixes the orphaned pool display).
          STILL TO BUILD: auto-refresh loop (edit the embeds every 24h instead of re-posting — store the 8
          message IDs, persist to disk); at rollover replace with loot winners then fresh boards.
+         ENVOY NAMES (Liam, confirmed, all distinct — no dupes): **MOB, PVP, RAID, ALVAR, DELRUK, VORDYN,
+         PP (HARD), PP (EASY)**. Header currently uses the `envoy-title` div (showed "Mob Envoy" on target 1).
+         VERIFY on next run: do all 8 titles read sensibly + do target IDs 1..8 map to these names in order?
+         If titles are the verbose "X Envoy" form, optionally map target_id → Liam's shorthand (MOB/PVP/…).
+         Also now showing "🎁 Buff → <account>" (the envoy-name div = the account that gets the buff, NOT
+         the envoy name — Liam corrected this).
       • **`parse_envoy_latest_pool(html)` BUILT** ✅ — reads max pool from Spawn History (envoy_loot/<pool>/
          <envoy>) links. Confirms the pool auto-fetch trigger data. NOTE: pool is now **51** (was 50) —
          confirms the Aug 6 cycle DID roll over (we just missed watching it live).

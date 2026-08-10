@@ -1217,7 +1217,7 @@ class GodMonitor(commands.Cog):
     async def envoy_leaderboard_sub(self, ctx):
         """Post the current leaderboard for each of the 8 envoys (one embed each)."""
         from outwar.scraper import (parse_envoy_leaderboard, parse_envoy_latest_pool,
-                                     parse_envoy_name)
+                                     parse_envoy_name, parse_envoy_buff_account)
         import re as _re, time as _time
 
         status_msg = await ctx.send("⏳ Fetching envoy leaderboards…")
@@ -1247,6 +1247,7 @@ class GodMonitor(commands.Cog):
                 page = await self.session.get(f"envoy?target={target_id}")
                 rows = parse_envoy_leaderboard(page)
                 name = parse_envoy_name(page) or f"Envoy {target_id}"
+                buff_account = parse_envoy_buff_account(page)
                 if latest_pool is None:
                     latest_pool = parse_envoy_latest_pool(page)
                 if not rows:
@@ -1258,7 +1259,14 @@ class GodMonitor(commands.Cog):
                     lines.append(f"{r['rank']:<3}{nm:<20}{r['level']:>4}{r['attacks']:>6}")
                 lines.append("```")
                 header = f"{es.ICON_ENVOY} {name} — Leaderboard"
-                desc = (countdown_str + "\n" if countdown_str else "") + "\n".join(lines)
+                # Subtitle: countdown + which account gets the buff this cycle
+                subtitle_bits = []
+                if countdown_str:
+                    subtitle_bits.append(countdown_str)
+                if buff_account:
+                    subtitle_bits.append(f"🎁 Buff → {buff_account}")
+                subtitle = ("\n".join(subtitle_bits) + "\n") if subtitle_bits else ""
+                desc = subtitle + "\n".join(lines)
                 await ctx.send(embed=es.info_embed(header, desc))
                 posted += 1
             except Exception as e:
