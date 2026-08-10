@@ -221,7 +221,18 @@ Last updated: 2026-08-02
          text-in-embed per envoy (aligned # / Character / Lvl / Atk in a code block, handles long lists),
          with a "Cycle ends in Xd Yh" header from the countdown timestamp. Also updates the dashboard's
          stale envoy_loot_pool with the real value while it's at it (fixes the orphaned pool display).
-         STILL TO BUILD: at rollover replace with loot winners then fresh boards (needs Aug 20 observation).
+         **REFRESH-ON-ROLLOVER BUILT 2026-08-10** ✅ — when the cycle rolls, fresh leaderboards are posted
+         immediately (force_repost) so the channel never shows the old cycle's stale board waiting for the
+         next scheduled refresh. Countdown-alert tracker also resets on rollover.
+         STILL TO BUILD (needs Aug 20 observation): the LOOT-WINNER display for the ENDED cycle (show winners
+         before the fresh boards go up). ⚠️ PAGINATION CONSTRAINT (Liam flagged): some envoys — esp. **PP
+         Envoy (Hard)** — roll enough items to be ~2 pages on the website. Discord embed description caps at
+         **4096 chars** (whole embed 6000). A big winners list can EXCEED this → embed send FAILS (won't
+         auto-work). Options to decide when we see real loot data: (a) split into multiple embeds e.g.
+         "PP Hard Winners (1/2)"/(2/2) — but then message-ID tracking must flex from a fixed 8 to N msgs;
+         (b) truncate + "…and N more" with a link to the loot page; (c) embed fields (25×1024, still capped).
+         MEASURE actual PP Hard winner length from the Aug 20 dump before choosing. This also means the
+         leaderboard message-ID model (currently assumes 8) may need to become variable-length.
          **AUTO-REFRESH BUILT 2026-08-10** ✅ — `!envoy autoboard start|stop|refresh|status`. Posts the 8
          embeds to the **envoys** alert channel (same channel as envoy alerts), edits them IN PLACE.
          Refreshes **4×/day at 17:15 / 23:15 / 05:15 / 11:15 UK** (6h apart, one landing just before the

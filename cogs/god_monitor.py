@@ -397,6 +397,21 @@ class GodMonitor(commands.Cog):
             except Exception:
                 pass
 
+            # New cycle → post fresh leaderboards so the channel isn't left showing
+            # the old cycle's stale board until the next scheduled refresh. force_repost
+            # deletes the old embeds and posts new ones for the new cycle.
+            # (Loot-winner display for the ENDED cycle is a separate build — see TODO,
+            # pending the Aug 20 rollover observation for sizing/format.)
+            try:
+                if db.get_settings().get("envoy_leaderboard_msgs"):
+                    await self._post_or_refresh_leaderboards(force_repost=True)
+                    logger.info("GOD_MONITOR", "[ENVOY ROLLOVER] posted fresh leaderboards for new cycle")
+            except Exception as e:
+                logger.warning("GOD_MONITOR", f"[ENVOY ROLLOVER] fresh leaderboard post failed: {e}")
+
+            # Reset the countdown-alert message tracker for the new cycle
+            self._envoy_alert_msg_id = None
+
         # --- Countdown alerts (1d / 1h) — delete + repost so they notify without
         # cluttering. Each threshold fires once per cycle; state persists so a
         # restart doesn't re-fire an already-passed one. On rollover, reset. ---
