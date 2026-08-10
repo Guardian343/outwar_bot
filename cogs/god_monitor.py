@@ -1250,14 +1250,18 @@ class GodMonitor(commands.Cog):
                 buff_account = parse_envoy_buff_account(page)
                 if latest_pool is None:
                     latest_pool = parse_envoy_latest_pool(page)
-                if not rows:
-                    continue
-                # Build an aligned text table inside the embed
-                lines = ["```", f"{'#':<3}{'Character':<20}{'Lvl':>4}{'Atk':>6}"]
-                for r in rows:
-                    nm = (r["name"] or "")[:19]
-                    lines.append(f"{r['rank']:<3}{nm:<20}{r['level']:>4}{r['attacks']:>6}")
-                lines.append("```")
+                # Build the table — or a placeholder when no one has attacked yet.
+                # We still post the embed (never skip) so all 8 envoys stay present
+                # and in numerical order for later edits / mid-cycle leaderboards.
+                if rows:
+                    lines = ["```", f"{'#':<3}{'Character':<20}{'Lvl':>4}{'Atk':>6}"]
+                    for r in rows:
+                        nm = (r["name"] or "")[:19]
+                        lines.append(f"{r['rank']:<3}{nm:<20}{r['level']:>4}{r['attacks']:>6}")
+                    lines.append("```")
+                    table = "\n".join(lines)
+                else:
+                    table = "*No attacks yet this cycle.*"
                 header = f"{es.ICON_ENVOY} {name} — Leaderboard"
                 # Subtitle: countdown + which account gets the buff this cycle
                 subtitle_bits = []
@@ -1266,7 +1270,7 @@ class GodMonitor(commands.Cog):
                 if buff_account:
                     subtitle_bits.append(f"🎁 Buff → {buff_account}")
                 subtitle = ("\n".join(subtitle_bits) + "\n") if subtitle_bits else ""
-                desc = subtitle + "\n".join(lines)
+                desc = subtitle + table
                 await ctx.send(embed=es.info_embed(header, desc))
                 posted += 1
             except Exception as e:
