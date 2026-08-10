@@ -987,6 +987,60 @@ def parse_envoys(html: str) -> list[Envoy]:
     return envoys
 
 
+def parse_envoy_leaderboard(html: str) -> list[dict]:
+    """Parse the Leaderboard from an envoy target page (envoy?target=<id>).
+    The leaderboard is a CSS grid, not a table: a .grid-container inside the
+    .leaderboard-section titled 'Leaderboard' (NOT 'Spawn History'), with cells
+    as .grid-item divs — first 4 are headers (Rank/Character/Level/Attacks), then
+    players in groups of 4.
+    Returns a list of {rank, name, profile_id, level, attacks}.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    board = None
+    for sec in soup.find_all("div", class_="leaderboard-section"):
+        title = sec.find("div", class_="leaderboard-title")
+        if title and "leaderboard" in title.get_text(strip=True).lower():
+            board = sec
+            break
+    if not board:
+        return []
+    grid = board.find("div", class_="grid-container")
+    if not grid:
+        return []
+    cells = grid.find_all("div", class_="grid-item")
+    if len(cells) < 8:  # need at least headers + 1 player
+        return []
+    rows = []
+    data = cells[4:]  # skip the 4 header cells
+    for k in range(0, len(data) - 3, 4):
+        try:
+            rank = data[k].get_text(strip=True).rstrip(".")
+            name_cell = data[k + 1]
+            a = name_cell.find("a")
+            name = a.get_text(strip=True) if a else name_cell.get_text(strip=True)
+            profile_id = None
+            if a and a.get("href"):
+                m = re.search(r"profile\?id=(\d+)", a["href"])
+                profile_id = int(m.group(1)) if m else None
+            level = data[k + 2].get_text(strip=True)
+            attacks = data[k + 3].get_text(strip=True)
+            rows.append({
+                "rank": rank, "name": name, "profile_id": profile_id,
+                "level": level, "attacks": attacks,
+            })
+        except Exception as e:
+            logger.warning("SCRAPER", f"Error parsing leaderboard row: {e}")
+    return rows
+
+
+def parse_envoy_latest_pool(html: str) -> int | None:
+    """Extract the latest pool number from an envoy target page's Spawn History
+    (links like envoy_loot/<pool>/<envoy_id>). Returns the max pool seen, or None.
+    """
+    pools = [int(m) for m in re.findall(r"envoy_loot/(\d+)/\d+", html)]
+    return max(pools) if pools else None
+
+
 # ---------------------------------------------------------------------------
 # Equipment page scraping
 # ---------------------------------------------------------------------------

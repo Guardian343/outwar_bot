@@ -201,8 +201,14 @@ Last updated: 2026-08-02
          self-backfilling (fixes original downtime-miss bug — old trigger watched spawned→despawn but
          envoys never despawn = dead code).
       3. **Live leaderboards**: 1 embed per envoy (8), edited every 24h, header shows countdown. Data
-         CONFIRMED on `envoy?target=<id>` (Rank|Character|Level|Attacks). At rollover: replace with loot
-         winners, then fresh leaderboards.
+         CONFIRMED on `envoy?target=<id>` (Rank|Character|Level|Attacks). **PARSER BUILT 2026-08-xx** ✅ —
+         `parse_envoy_leaderboard(html)` in scraper.py (leaderboard is a CSS grid, not a table: .grid-item
+         divs, 4 headers then players in groups of 4; extracts rank/name/profile_id/level/attacks). Tested
+         against live dump. STILL TO BUILD: the 8 embeds + 24h edit loop + countdown header; at rollover
+         replace with loot winners then fresh boards.
+      • **`parse_envoy_latest_pool(html)` BUILT** ✅ — reads max pool from Spawn History (envoy_loot/<pool>/
+         <envoy>) links. Confirms the pool auto-fetch trigger data. NOTE: pool is now **51** (was 50) —
+         confirms the Aug 6 cycle DID roll over (we just missed watching it live).
       • **Auto-dump on rollover: BUILT 2026-08-xx** ✅ — `_check_envoy_rollover` in god_monitor.py watches
         the envoy_overview cycle-end timestamp each poll; when it jumps forward (rollover), auto-dumps
         overview + all 8 target pages to `~/envoy_rollover_<stamp>_*.html` and posts a channel alert.
