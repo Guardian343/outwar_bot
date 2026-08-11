@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 from outwar import logger
+from outwar.servers import host_for, login_url_for, DEFAULT_SERVER
 
 
-BASE_URL = "https://sigil.outwar.com"
-LOGIN_URL = "http://sigil.outwar.com/index.php"
+# Back-compat aliases (server 1 / Sigil). New code should prefer host_for(server_id).
+BASE_URL = host_for(DEFAULT_SERVER)
+LOGIN_URL = login_url_for(DEFAULT_SERVER)
 
 # Default cap on simultaneous connections to sigil. Prevents bursting too many
 # requests at once (the rate-limit trigger). Tunable live via settings.json
@@ -289,9 +291,14 @@ class OutwarSession:
         is_action: bool = False,
         max_attempts: int = None,
         timeout_secs: float = 60.0,
+        server_id: int = DEFAULT_SERVER,
     ) -> RequestResult:
         """
         Send a request to Outwar and return a classified result.
+
+        ``server_id`` selects which game server's host to hit (1=Sigil default,
+        2=Torax). Defaults to Sigil so existing single-server callers are
+        unchanged; dual-server callers pass server_id explicitly.
 
         Read-only requests may retry because they only fetch data.
 
@@ -300,7 +307,7 @@ class OutwarSession:
         caller should verify game state instead.
         """
         method = method.upper()
-        url = f"{BASE_URL}/{path.lstrip('/')}"
+        url = f"{host_for(server_id)}/{path.lstrip('/')}"
 
         if max_attempts is None:
             max_attempts = 1 if is_action else 5
@@ -455,28 +462,32 @@ class OutwarSession:
             attempts=max_attempts,
         )
 
-    async def get(self, path: str) -> str:
-        """Read-only GET request. Safe to retry."""
+    async def get(self, path: str, *, server_id: int = DEFAULT_SERVER) -> str:
+        """Read-only GET request. Safe to retry. server_id selects the game
+        server (1=Sigil default, 2=Torax)."""
         result = await self.request_result(
             "GET",
             path,
             is_action=False,
+            server_id=server_id,
         )
 
         return result.html
 
-    async def get_as(self, path: str, suid: int) -> str:
+    async def get_as(self, path: str, suid: int, *, server_id: int = DEFAULT_SERVER) -> str:
         """Read-only GET as a specific trustee. Safe to retry."""
         result = await self.request_result(
             "GET",
             path,
             cookies={"ow_userid": str(suid)},
             is_action=False,
+            server_id=server_id,
         )
 
         return result.html
 
-    async def post(self, path: str, data: dict, *, is_action: bool = True) -> str:
+    async def post(self, path: str, data: dict, *, is_action: bool = True,
+                   server_id: int = DEFAULT_SERVER) -> str:
         """
         POST request.
 
@@ -488,6 +499,7 @@ class OutwarSession:
             path,
             data=data,
             is_action=is_action,
+            server_id=server_id,
         )
 
         return result.html
@@ -499,6 +511,7 @@ class OutwarSession:
         suid: int,
         *,
         is_action: bool = True,
+        server_id: int = DEFAULT_SERVER,
     ) -> str:
         """
         POST as a specific trustee.
@@ -512,17 +525,19 @@ class OutwarSession:
             data=data,
             cookies={"ow_userid": str(suid)},
             is_action=is_action,
+            server_id=server_id,
         )
 
         return result.html
 
-    async def get_sse(self, path: str, timeout_secs: int = 3600) -> str:
+    async def get_sse(self, path: str, timeout_secs: int = 3600,
+                      *, server_id: int = DEFAULT_SERVER) -> str:
         """
         Fetch an SSE endpoint with an extended timeout and graceful handling
         of TransferEncodingError — the loot data is usually complete by the
-        time the error fires.
+        time the error fires. server_id selects the game server.
         """
-        url = f"{BASE_URL}/{path.lstrip('/')}"
+        url = f"{host_for(server_id)}/{path.lstrip('/')}"
         timeout = aiohttp.ClientTimeout(total=timeout_secs)
 
         try:

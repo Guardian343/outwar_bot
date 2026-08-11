@@ -36,8 +36,9 @@ from cogs import embed_style as es
 
 # Bot is on Sigil for now. Torax is a far-future "if others want it" thing —
 # when that comes, this becomes per-server, but there's no point building it yet.
-DEFAULT_SERVER = 1
-SERVER_HOST = {1: "https://sigil.outwar.com", 2: "https://torax.outwar.com"}
+# Server hosts come from the central registry (single source of truth) now that
+# dual-server support is being built out.
+from outwar.servers import DEFAULT_SERVER, SERVER_HOSTS as SERVER_HOST
 POLL_MINUTES = 15
 
 

@@ -263,6 +263,23 @@ Last updated: 2026-08-02
         still rolling? + validate leaderboard parse selector against live data.
       • `!envoy-debug` (owner-only, hidden, misc_commands.py) STAYS DEPLOYED for the rollover.
 
+- [ ] **DUAL-SERVER SUPPORT (Sigil + Torax)** `🔴 BIG — do BEFORE session work` — see **DUAL_SERVER_PLAN.md**
+  DECISION: ONE server-aware bot (NOT two instances — two processes = the session-flood risk we fixed).
+  Servers: 1=Sigil (default), 2=Torax. Liam does EVERYTHING on both. Channel model: server-prefixed
+  channels (`sigil-gods`/`torax-gods`…), bot resolves server FROM THE CHANNEL (no flags). Safety principle:
+  every server-aware entry point DEFAULTS to Sigil, so nothing changes until Torax is wired in.
+  **PHASE 1 (foundation) DONE 2026-08-10 ✅ (safe, non-breaking):** new `outwar/servers.py` (single source of
+  truth: host_for/name_for/resolve_server/server_from_channel + registries); `session.py` threads optional
+  `server_id=DEFAULT_SERVER` through request_result/get/get_as/post/post_as/get_sse; `ssid_store.py` +
+  `ssid_commands.py` unified to the central registry. Verified: all parse, 11/12 cogs load (12th fails
+  identically on original code — harness quirk). Everything still defaults to Sigil = zero behaviour change.
+  **REMAINING (Phases 2–5, need Liam's renamed channels):** P2 channel→server resolver + per-server alert
+  channels; P3 monitors poll BOTH servers → matching channels; P4 commands use invoking channel's server;
+  P5 config + data-model (trustees/SSIDs may need a server_id field) + sweep 35 remaining hardcoded sigil
+  hosts (list in DUAL_SERVER_PLAN.md). ⚠️ Those 35 are LEFT deliberately — entangled with per-request
+  ow_userid cookie + alert context; changing blind risks current Sigil behaviour. Do phased + tested.
+  **LIAM PREP (no code):** rename channels to `sigil-*`/`torax-*` → unblocks Phase 2.
+
 - [ ] **RGA stats + export commands** `🟡 Medium` (part of Session ID expansion)
       Bot scrapes ONE RGA via its stored SSID (same as Freak's Bloop; no dependency on his tool).
       • `!rga stats <rga>` — totals + averages as a table image (like !status/!pcaps). Stats: exp, power,

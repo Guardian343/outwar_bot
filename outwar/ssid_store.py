@@ -153,11 +153,11 @@ def mark_ok(discord_id: int):
 # returns a roster of characters; a dead one returns an empty/login page. That
 # empty-roster signal is exactly how expiry is detected.
 
-_SERVER_HOST = {1: "https://sigil.outwar.com", 2: "https://torax.outwar.com"}
-# support.php lives on the network-wide Rampid host, NOT the per-game-server host.
-# Confirmed working (Freak): rampidgaming.outwar.com/support.php?rg_sess_id=..&support_server=N
-# The page greets "Welcome back, <RGA name>" — the real login name.
-_RAMPID_HOST = "http://rampidgaming.outwar.com"
+# Host constants come from the central server registry (single source of truth).
+from outwar.servers import SERVER_HOSTS as _SERVER_HOST, RAMPID_HOST as _RAMPID_HOST
+# support.php lives on the network-wide Rampid host (_RAMPID_HOST), NOT the per-
+# game-server host. Confirmed (Freak): rampidgaming.outwar.com/support.php?
+# rg_sess_id=..&support_server=N — greets "Welcome back, <RGA name>".
 
 
 def parse_rga_login(html: str) -> str | None:
