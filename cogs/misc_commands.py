@@ -45,6 +45,59 @@ class MiscCommands(commands.Cog):
     # TEMPORARY DEBUG — dump raw envoy pages to inspect available signals.
     # Remove after we've designed the auto-fetch trigger.
     # ------------------------------------------------------------------
+    @commands.command(name="server-probe", hidden=True)
+    async def server_probe(self, ctx, path: str = "crew_bossspawns"):
+        """OWNER PROBE: test whether the bot's OWN rg_sess_id works cookielessly with
+        a per-request serverid, for BOTH servers. Fetches <path> for serverid=1 and
+        serverid=2 using the bot's own ssid+suid, and reports whether they differ.
+        Different content = the per-request serverid model works for game pages (the
+        foundation for concurrent-safe dual-server monitoring). Identical = it
+        doesn't, and we need another approach. Read-only, safe."""
+        from outwar import ssid_store as store
+        import hashlib
+        ssid = getattr(self.session, "session_id", None)
+        suid = getattr(self.session, "user_id", None)
+        if not ssid or not suid:
+            await ctx.send("❌ Bot has no session_id/user_id available — can't probe.")
+            return
+        await ctx.send(f"🔬 Probing `{path}` for both servers using the bot's own "
+                       f"ssid (suid {suid})…")
+        results = {}
+        for sid in (1, 2):
+            try:
+                html = await store.sess_get(path, ssid, suid, sid)
+            except Exception as e:
+                html = f"__ERR__ {e}"
+            results[sid] = html or ""
+
+        def _fp(h):
+            if h.startswith("__ERR__"):
+                return h, 0, "(error)"
+            digest = hashlib.md5(h.encode("utf-8", "ignore")).hexdigest()[:8]
+            # crude signal: count boss/god rows or table rows
+            import re as _re
+            rows = len(_re.findall(r"<tr", h, _re.I))
+            title = _re.search(r"<title>([^<]*)</title>", h, _re.I)
+            t = title.group(1).strip()[:40] if title else "(no title)"
+            return digest, len(h), f"{rows} rows · `{t}`"
+
+        s1_fp, s1_len, s1_info = _fp(results[1])
+        s2_fp, s2_len, s2_info = _fp(results[2])
+        differ = (s1_fp != s2_fp) and not results[1].startswith("__ERR__") \
+                 and not results[2].startswith("__ERR__")
+        verdict = ("✅ **DIFFERENT** — per-request serverid WORKS for game pages. "
+                   "Safe to build concurrent dual-server monitoring on this."
+                   if differ else
+                   "⚠️ **IDENTICAL (or error)** — per-request serverid did NOT switch "
+                   "servers for this page. The bot's own ssid may not support the "
+                   "cookieless serverid model; we'd need another approach.")
+        await ctx.send(
+            f"**Server probe — `{path}`**\n"
+            f"• Sigil (1): {s1_len:,}b · fp `{s1_fp}` · {s1_info}\n"
+            f"• Torax (2): {s2_len:,}b · fp `{s2_fp}` · {s2_info}\n"
+            f"\n{verdict}"
+        )
+
     @commands.command(name="envoy-debug", hidden=True)
     async def envoy_debug(self, ctx, target: str = None):
         """TEMP: dump raw envoy pages to files on the Pi for inspection."""
