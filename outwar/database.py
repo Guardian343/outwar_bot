@@ -162,24 +162,80 @@ def delete_crew(name: str) -> bool:
 # Trustees
 # ---------------------------------------------------------------------------
 
-def get_trustees() -> list[dict]:
-    return _read("trustees.json")
+def get_trustees(server_id: int = None, include_excluded: bool = False) -> list[dict]:
+    """Return trustees, optionally filtered to one server, with excluded accounts
+    dropped by default.
+
+    - server_id: filter to that server (untagged trustee → server 1/Sigil).
+    - Excluded accounts (per-server, via !exclude) are removed unless
+      include_excluded=True. When server_id is given, that server's exclusion list
+      is used; with no server_id, ALL servers' exclusions are applied (safe union).
+    Pass include_excluded=True for the few places that need everything (!profile,
+    RGA stats). Reads fresh each call, so exclusions are LIVE.
+    """
+    trustees = _read("trustees.json")
+    # Server filter first (untagged == server 1).
+    if server_id is not None:
+        sid = int(server_id)
+        trustees = [t for t in trustees if int(t.get("server_id", 1)) == sid]
+    # Exclusion filter (per-server, live).
+    if not include_excluded:
+        if server_id is not None:
+            excl = {n.lower() for n in get_excluded(int(server_id))}
+        else:
+            # No server context → union of all servers' exclusions.
+            s = get_settings()
+            by_server = s.get("excluded_accounts_by_server") or {}
+            excl = {n.lower() for lst in by_server.values() for n in lst}
+            # include legacy flat list too, just in case
+            excl |= {n.lower() for n in s.get("excluded_accounts", [])}
+        if excl:
+            trustees = [t for t in trustees if t.get("name", "").lower() not in excl]
+    return trustees
 
 
 def save_trustees(trustees: list[dict]):
     _write("trustees.json", trustees)
 
 
-def get_trustees_by_crew(crew_full_name: str) -> list[dict]:
-    return [t for t in get_trustees() if t.get("crew", "") == crew_full_name]
+def save_trustees_for_server(server_id: int, server_trustees: list[dict]):
+    """Replace ONLY the given server's trustees, preserving every other server's.
+    A scan sees only the scanned server's accounts, so it must not wipe the other
+    server's list."""
+    sid = int(server_id)
+    existing = _read("trustees.json")
+    kept = [t for t in existing if int(t.get("server_id", 1)) != sid]
+    tagged = []
+    for t in server_trustees:
+        t = dict(t)
+        t["server_id"] = sid
+        tagged.append(t)
+    _write("trustees.json", kept + tagged)
 
 
-def get_trustees_by_group(group_name: str) -> list[dict]:
+def trustee_counts_by_server() -> dict:
+    """Return {server_id: count} across ALL trustees (untagged → 1). Raw count,
+    includes excluded."""
+    counts = {}
+    for t in _read("trustees.json"):
+        sid = int(t.get("server_id", 1))
+        counts[sid] = counts.get(sid, 0) + 1
+    return counts
+
+
+def get_trustees_by_crew(crew_full_name: str, server_id: int = None,
+                         include_excluded: bool = False) -> list[dict]:
+    return [t for t in get_trustees(server_id, include_excluded)
+            if t.get("crew", "") == crew_full_name]
+
+
+def get_trustees_by_group(group_name: str, server_id: int = None,
+                          include_excluded: bool = False) -> list[dict]:
     group = get_group(group_name)
     if not group:
         return []
     names = group_to_list(group)
-    trustees = get_trustees()
+    trustees = get_trustees(server_id, include_excluded)
     return [t for t in trustees if t["name"] in names]
 
 
@@ -317,15 +373,40 @@ def remove_locked_crew(crew_id=None, crew_name=None):
 # Excluded accounts (never used in boss raids or optimise)
 # ---------------------------------------------------------------------------
 
-def get_excluded() -> list:
-    """List of excluded account names (original casing preserved)."""
-    return get_settings().get("excluded_accounts", [])
+def _migrate_excluded(settings: dict) -> dict:
+    """Migrate the legacy flat `excluded_accounts` list → per-server dict under
+    `excluded_accounts_by_server` {"1": [...], "2": [...]}. Legacy entries are all
+    Sigil (server 1). Idempotent — safe to call every time. Returns the per-server
+    dict."""
+    by_server = settings.get("excluded_accounts_by_server")
+    legacy = settings.get("excluded_accounts")
+    if by_server is None:
+        by_server = {}
+        if legacy:
+            by_server["1"] = list(legacy)   # legacy = Sigil
+        settings["excluded_accounts_by_server"] = by_server
+        # Leave the legacy key in place (harmless) so an accidental rollback to
+        # old code still works; new code reads the per-server dict.
+        save_settings(settings)
+    return by_server
 
 
-def add_excluded(names: list) -> list:
-    """Add names to the exclude list. Returns the names actually added (new)."""
+def get_excluded(server_id: int = 1) -> list:
+    """List of excluded account names for a server (original casing preserved).
+    Per-server: excluding a name on Sigil doesn't affect the same name on Torax.
+    Reads fresh from settings every call, so exclusions are LIVE (take effect
+    immediately, no restart)."""
     settings = get_settings()
-    cur = settings.get("excluded_accounts", [])
+    by_server = _migrate_excluded(settings)
+    return by_server.get(str(int(server_id)), [])
+
+
+def add_excluded(names: list, server_id: int = 1) -> list:
+    """Add names to a server's exclude list. Returns the names actually added."""
+    settings = get_settings()
+    by_server = _migrate_excluded(settings)
+    sid = str(int(server_id))
+    cur = by_server.get(sid, [])
     have = {n.lower() for n in cur}
     added = []
     for n in names:
@@ -333,34 +414,59 @@ def add_excluded(names: list) -> list:
             cur.append(n)
             have.add(n.lower())
             added.append(n)
-    settings["excluded_accounts"] = cur
+    by_server[sid] = cur
+    settings["excluded_accounts_by_server"] = by_server
     save_settings(settings)
     return added
 
 
-def remove_excluded(names: list) -> list:
-    """Remove names from the exclude list. Returns the names actually removed."""
+def remove_excluded(names: list, server_id: int = 1) -> list:
+    """Remove names from a server's exclude list. Returns names actually removed."""
     settings = get_settings()
-    cur = settings.get("excluded_accounts", [])
+    by_server = _migrate_excluded(settings)
+    sid = str(int(server_id))
+    cur = by_server.get(sid, [])
     drop = {n.lower() for n in names}
     removed = [n for n in cur if n.lower() in drop]
-    settings["excluded_accounts"] = [n for n in cur if n.lower() not in drop]
+    by_server[sid] = [n for n in cur if n.lower() not in drop]
+    settings["excluded_accounts_by_server"] = by_server
     save_settings(settings)
     return removed
+
+
+def is_excluded(name: str, server_id: int = 1) -> bool:
+    """True if `name` is excluded on the given server. Live (reads fresh)."""
+    return name.lower() in {n.lower() for n in get_excluded(server_id)}
 
 
 # ---------------------------------------------------------------------------
 # Alert channels
 # ---------------------------------------------------------------------------
 
-def get_alert_channel(alert_type: str) -> Optional[int]:
-    """Get the Discord channel ID for a given alert type (gods, bosses, envoys)."""
-    return get_settings().get(f"alert_channel_{alert_type}")
+def get_alert_channel(alert_type: str, server_id: int = None) -> Optional[int]:
+    """Get the Discord channel ID for an alert type (gods, bosses, envoys, …).
+    Per-server aware: with server_id, reads `alert_channel_<type>_<server_id>`,
+    falling back to the legacy flat key for server 1 (Sigil). No server_id → the
+    legacy flat key, so existing callers are unchanged."""
+    s = get_settings()
+    if server_id is not None:
+        per_server = s.get(f"alert_channel_{alert_type}_{int(server_id)}")
+        if per_server:
+            return per_server
+        if int(server_id) == 1:
+            return s.get(f"alert_channel_{alert_type}")
+        return None
+    return s.get(f"alert_channel_{alert_type}")
 
 
-def set_alert_channel(alert_type: str, channel_id: int):
+def set_alert_channel(alert_type: str, channel_id: int, server_id: int = None):
+    """Set the alert channel for a type, optionally per-server. No server_id writes
+    the legacy flat key (server-1/Sigil)."""
     settings = get_settings()
-    settings[f"alert_channel_{alert_type}"] = channel_id
+    if server_id is not None:
+        settings[f"alert_channel_{alert_type}_{int(server_id)}"] = channel_id
+    else:
+        settings[f"alert_channel_{alert_type}"] = channel_id
     save_settings(settings)
 
 

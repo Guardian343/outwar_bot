@@ -3,6 +3,21 @@ Last updated: 2026-08-02
 
 ## 🔴 Critical (Fix Before Next Major Session)
 
+- [x] **⚠️ database.py was OUT OF SYNC with pushed cogs** — FIXED 2026-08-11. The pushed auth.py/
+  admin_commands.py called `db.get_alert_channel(type, server_id=…)`, `db.save_trustees_for_server`,
+  `db.trustee_counts_by_server` — but database.py (pushed separately) LACKED them → would crash on restart.
+  Re-added all: per-server alert channels, trustee server-tagging, and per-server exclusions. If deploying,
+  make sure THIS database.py goes with it.
+
+- [x] **Per-server `!exclude` (global ignore)** — DONE 2026-08-11. Built on the EXISTING
+  `!exclude`/`!include`/`!excluded` commands (kept). Now: (1) PER-SERVER — excluding `GuardianLiam` in a
+  Sigil channel only excludes Sigil's, not the same-named Torax account (storage: `excluded_accounts_by_server`
+  {"1":[…],"2":[…]}, legacy flat list migrated to Sigil); (2) LIVE — reads fresh every call, takes effect
+  immediately (no restart), so you can exclude mid-cycle for a dungeon run; (3) GLOBAL — `get_trustees(server_id)`
+  now filters that server's exclusions AT SOURCE, so excluded accounts vanish from raids/caps/monitors/stats/
+  lists everywhere. `include_excluded=True` bypasses for the future `!profile` + RGA stats. Commands resolve
+  server from the channel. All 7 get_excluded() consumers updated to pass server.
+
 - [ ] **`parse_envoys` doesn't match envoy pages at all** `🔴 Hard` — surfaced 2026-08-10
   TESTED: `parse_envoys` returns 0 on ALL envoy pages (envoy_overview.html, envoy_page.html,
   envoy_target_1.html). Its selectors (mobid=/target= links + onmouseover names) are built for the

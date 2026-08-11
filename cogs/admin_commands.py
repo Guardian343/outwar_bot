@@ -742,42 +742,51 @@ class OptimumCommands(commands.Cog):
 
     @commands.command(name="exclude")
     async def exclude(self, ctx, *accounts):
-        """Exclude one or more accounts from boss raids and optimise.
-        Usage: !exclude Name1 Name2 Name3 …"""
+        """Exclude one or more accounts on THIS server (from the channel).
+        The bot ignores them in raids, optimise, caps, stats — everywhere.
+        Per-server: excluding on Sigil doesn't affect the same name on Torax.
+        Live — takes effect immediately, no restart. Usage: !exclude Name1 Name2 …"""
+        from outwar.servers import server_from_channel, name_for
         if not accounts:
             await ctx.send("Usage: `!exclude <account> [account2 …]`")
             return
-        added = db.add_excluded(list(accounts))
+        server_id = server_from_channel(ctx.channel)
+        added = db.add_excluded(list(accounts), server_id=server_id)
         already = [a for a in accounts if a not in added]
         lines = []
         if added:
-            lines.append(f"🚫 Excluded **{len(added)}**: {', '.join(added)}")
+            lines.append(f"🚫 Excluded **{len(added)}** on **{name_for(server_id)}**: {', '.join(added)}")
         if already:
             lines.append(f"Already excluded: {', '.join(already)}")
-        total = db.get_excluded()
-        lines.append(f"Total excluded: **{len(total)}**")
+        total = db.get_excluded(server_id)
+        lines.append(f"Total excluded on {name_for(server_id)}: **{len(total)}**")
         await ctx.send("\n".join(lines))
 
     @commands.command(name="include", aliases=["unexclude"])
     async def include(self, ctx, *accounts):
-        """Remove one or more accounts from the exclude list.
+        """Remove one or more accounts from THIS server's exclude list.
         Usage: !include Name1 Name2 …"""
+        from outwar.servers import server_from_channel, name_for
         if not accounts:
             await ctx.send("Usage: `!include <account> [account2 …]`")
             return
-        removed = db.remove_excluded(list(accounts))
+        server_id = server_from_channel(ctx.channel)
+        removed = db.remove_excluded(list(accounts), server_id=server_id)
         if removed:
-            await ctx.send(f"✅ Un-excluded **{len(removed)}**: {', '.join(removed)}\n"
-                           f"Total excluded: **{len(db.get_excluded())}**")
+            await ctx.send(f"✅ Un-excluded **{len(removed)}** on **{name_for(server_id)}**: "
+                           f"{', '.join(removed)}\n"
+                           f"Total excluded on {name_for(server_id)}: **{len(db.get_excluded(server_id))}**")
         else:
-            await ctx.send("None of those were on the exclude list.")
+            await ctx.send(f"None of those were excluded on **{name_for(server_id)}**.")
 
     @commands.command(name="excluded")
     async def excluded(self, ctx):
-        """Show the current exclude list."""
-        ex = db.get_excluded()
+        """Show THIS server's exclude list."""
+        from outwar.servers import server_from_channel, name_for
+        server_id = server_from_channel(ctx.channel)
+        ex = db.get_excluded(server_id)
         if not ex:
-            await ctx.send("No accounts are excluded.")
+            await ctx.send(f"No accounts are excluded on **{name_for(server_id)}**.")
             return
         await ctx.send(f"🚫 **Excluded accounts ({len(ex)})**\n" + ", ".join(sorted(ex)))
 
@@ -815,7 +824,8 @@ class OptimumCommands(commands.Cog):
             return
 
         all_t    = db.get_trustees()
-        excluded = {n.lower() for n in db.get_excluded()}
+        from outwar.servers import server_from_channel as _sfc
+        excluded = {n.lower() for n in db.get_excluded(_sfc(ctx.channel))}
         msg = await ctx.send(
             f"🔍 Optimising **{len(crews)}** crews — fetching stats for {len(all_t)} trustees…")
 
@@ -982,7 +992,8 @@ class OptimumCommands(commands.Cog):
             return None
 
         results = await asyncio.gather(*[_fetch(t) for t in all_t])
-        _excluded = {n.lower() for n in db.get_excluded()}
+        from outwar.servers import server_from_channel as _sfc
+        _excluded = {n.lower() for n in db.get_excluded(_sfc(ctx.channel))}
         # Weighted percentile base = all trustees − excluded (before protected/locked filter)
         _wbase = [r for r in results if r and r["name"].lower() not in _excluded]
         results = [r for r in results if r and r["name"].lower() not in PROTECTED_ACCOUNTS
@@ -1160,7 +1171,8 @@ class OptimumCommands(commands.Cog):
         `!scores [crew]`   — roster ranked by weighted score (default: all trustees)"""
         import bisect
         all_t = db.get_trustees()
-        excluded = {n.lower() for n in db.get_excluded()}
+        from outwar.servers import server_from_channel as _sfc
+        excluded = {n.lower() for n in db.get_excluded(_sfc(ctx.channel))}
 
         single = crew_filter = None
         if arg:

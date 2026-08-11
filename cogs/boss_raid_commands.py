@@ -2275,9 +2275,9 @@ class BossRaidCommands(commands.Cog):
 
         await ctx.send(embed=embed)
 
-    def _resolve_group(self, group: str) -> list:
+    def _resolve_group(self, group: str, server_id: int = 1) -> list:
         all_trustees = db.get_trustees()
-        excluded = {n.lower() for n in db.get_excluded()}
+        excluded = {n.lower() for n in db.get_excluded(server_id)}
         def _keep(lst):
             return [t for t in lst if t["name"].lower() not in excluded]
         rga_group = db.get_group(group)
