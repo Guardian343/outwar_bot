@@ -25,8 +25,6 @@ from outwar.scraper import (
 )
 from outwar.constants import (
     ITEMS,
-    TOP_ALL_EXCLUDED_NAMES,
-    TOP_ALL_EXCLUDED_SUBSTRINGS,
     GIVEAWAY_USERS,
 )
 
@@ -346,11 +344,14 @@ class MiscCommands(commands.Cog):
             await ctx.send(f"Unknown stat `{stat}`. Use: power, ele, chaos")
             return
 
+        # Exclusions are now runtime-editable (db), not a hardcoded constant.
+        excl = db.get_top_exclusions()
+        excl_names, excl_subs = excl["names"], excl["substrings"]
         filtered = [
             t for t in self.trustees
             if t.get("level", 0) >= 80
-            and t["name"].lower() not in TOP_ALL_EXCLUDED_NAMES
-            and not any(s in t["name"].lower() for s in TOP_ALL_EXCLUDED_SUBSTRINGS)
+            and t["name"].lower() not in excl_names
+            and not any(s in t["name"].lower() for s in excl_subs)
         ]
 
         await ctx.send(
@@ -388,6 +389,57 @@ class MiscCommands(commands.Cog):
         )
         await ctx.send(embed=embed)
         await ctx.send(totals)
+
+    @commands.command(name="top-exclude")
+    async def top_exclude(self, ctx, action: str = None, *, value: str = None):
+        """Manage the top-all exclusion list (bot/alt accounts hidden from rankings).
+        Usage:
+          !top-exclude list                 — show all excluded names/substrings
+          !top-exclude add <name>           — exclude an exact account name
+          !top-exclude add-sub <substring>  — exclude any name containing <substring>
+          !top-exclude remove <name/sub>    — remove an entry (checks both)
+        Replaces the old hardcoded list — fully runtime-editable now."""
+        action = (action or "list").lower()
+        if action == "list":
+            excl = db.get_top_exclusions()
+            names = sorted(excl["names"])
+            subs = sorted(excl["substrings"])
+            embed = es.info_embed(
+                "🚫 Top-All Exclusions",
+                description=f"**{len(names)}** names · **{len(subs)}** substrings"
+            )
+            if names:
+                # chunk to stay under field limits
+                block, part = "", 1
+                for n in names:
+                    if len(block) + len(n) + 2 > 1000:
+                        embed.add_field(name=f"Names ({part})", value=block, inline=False)
+                        block, part = "", part + 1
+                    block += f"{n}, "
+                if block:
+                    embed.add_field(name=f"Names ({part})" if part > 1 else "Names",
+                                    value=block.rstrip(", "), inline=False)
+            if subs:
+                embed.add_field(name="Substrings", value=", ".join(subs), inline=False)
+            await ctx.send(embed=embed)
+            return
+        if not value:
+            await ctx.send("Give a value, e.g. `!top-exclude add SomeAlt`.")
+            return
+        if action == "add":
+            ok = db.add_top_exclusion(value, is_substring=False)
+            await ctx.send(f"✅ Excluded name **{value}**." if ok
+                           else f"**{value}** is already excluded.")
+        elif action in ("add-sub", "addsub", "add_substring"):
+            ok = db.add_top_exclusion(value, is_substring=True)
+            await ctx.send(f"✅ Excluded any name containing **{value}**." if ok
+                           else f"Substring **{value}** is already excluded.")
+        elif action in ("remove", "rm", "delete"):
+            ok = db.remove_top_exclusion(value)
+            await ctx.send(f"✅ Removed **{value}** from exclusions." if ok
+                           else f"**{value}** wasn't in the exclusion list.")
+        else:
+            await ctx.send(f"Unknown action `{action}`. Use: list, add, add-sub, remove.")
 
     # ------------------------------------------------------------------
 

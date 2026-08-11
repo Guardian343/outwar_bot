@@ -228,23 +228,51 @@ class AuthCommands(commands.Cog):
 
     def publish_settings_meta(self):
         """
-        Publish human-friendly settings context: alert-channel NAMES (resolved from
-        their IDs) and the last envoy loot pool. Read-only for the dashboard.
+        Publish human-friendly settings context for the dashboard (read-only):
+        alert-channel NAMES per server, trustee counts (total + per server), and
+        the last envoy loot pool.
         """
         try:
             from outwar import status_writer
+            from outwar.servers import SERVER_NAMES, name_for
             settings = db.get_settings()
-            channels = {}
-            for atype in ("gods", "bosses", "envoys", "drops", "summary", "log"):
-                cid = settings.get(f"alert_channel_{atype}")
+
+            def _resolve(cid):
                 if cid is None:
-                    continue
+                    return None
                 ch = self.bot.get_channel(int(cid)) if str(cid).isdigit() else None
                 name = getattr(ch, "name", None)
-                channels[atype] = {"id": str(cid), "name": ("#" + name) if name else str(cid)}
+                return {"id": str(cid), "name": ("#" + name) if name else str(cid)}
+
+            # Per-server alert channels. Server 1 falls back to the legacy flat key
+            # (that IS Sigil); server 2+ only uses its per-server key.
+            channels_by_server = {}
+            flat_channels = {}   # legacy shape kept for back-compat with the dashboard
+            for atype in ("gods", "bosses", "envoys", "drops", "summary", "log"):
+                for sid in SERVER_NAMES:
+                    cid = db.get_alert_channel(atype, server_id=sid)
+                    resolved = _resolve(cid)
+                    if resolved:
+                        channels_by_server.setdefault(str(sid), {})[atype] = resolved
+                # keep the old flat dict populated from server 1 for existing UI
+                flat = _resolve(db.get_alert_channel(atype, server_id=1))
+                if flat:
+                    flat_channels[atype] = flat
+
+            # Trustee counts: total + per server (untagged → Sigil/1).
+            counts = db.trustee_counts_by_server()
+            trustees_meta = {
+                "total": sum(counts.values()),
+                "by_server": {str(sid): counts.get(sid, 0) for sid in SERVER_NAMES},
+                "server_names": {str(sid): name_for(sid) for sid in SERVER_NAMES},
+            }
+
             envoy_last = settings.get("envoy_loot_pool")
             envoy_status = settings.get("envoy_loot_status")
-            status_writer.publish_settings_meta(channels, envoy_last, envoy_status)
+            status_writer.publish_settings_meta(
+                flat_channels, envoy_last, envoy_status,
+                channels_by_server=channels_by_server, trustees=trustees_meta,
+            )
         except Exception:
             pass
 

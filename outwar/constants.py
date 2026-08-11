@@ -516,7 +516,11 @@ ITEMS = {
 }
 
 # ---------------------------------------------------------------------------
-# ?top-all exclusions — bot/alt accounts that should never appear in rankings
+# ?top-all exclusions — ⚠️ SEED ONLY (deprecated as the live source).
+# These are now runtime-editable via !top-exclude and stored in
+# database/top_exclusions.json. This constant is read ONCE, to seed that file on
+# first run (see db.get_top_exclusions), then never again. Edit exclusions with
+# the command, NOT here. Kept only so a fresh install seeds sensibly.
 # ---------------------------------------------------------------------------
 
 TOP_ALL_EXCLUDED_NAMES = {

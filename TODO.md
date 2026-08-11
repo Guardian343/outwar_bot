@@ -142,6 +142,23 @@ Last updated: 2026-08-02
   polling above; (2) minor cosmetic — default spawn_days=14 may show a meaningless "next spawn window" for
   the dead-on-page week (suppress for unknown bosses if it looks wrong). No pre-emptive work — observe, fix after.
 
+## 🧩 De-hardcoding (make the bot fully adaptable — no hand-maintained lists in code)
+
+Goal (Liam): remove ALL hardcoded data from code so nothing needs a code edit +
+redeploy to change. Pattern: move the list to a JSON file in database/, seed it
+ONCE from the old constant (zero behaviour change on day one), manage at runtime
+via command. Mark the constant "SEED ONLY".
+
+- [x] **top-all exclusion list** ✅ DONE 2026-08-11 — 86 names + 4 substrings moved from
+  `constants.TOP_ALL_EXCLUDED_*` to `database/top_exclusions.json`. Seeded from the constant on first read
+  (identical behaviour). Managed via `!top-exclude list|add|add-sub|remove`. top-all reads the db now.
+  Constant kept as seed-only (marked deprecated).
+- [ ] **Other hardcoded lists to migrate next** (survey): `CREW_ALIASES` (crew short-names),
+  `GOD_ROOMS` (god→room table), `GIVEAWAY_USERS`, `ITEMS`, any other hand-maintained dict/set in
+  constants.py or database.py. Same pattern each time: db-backed + seed + runtime command. Do one at a
+  time, each behaviour-identical on seed. Priority order TBD with Liam (CREW_ALIASES + GOD_ROOMS likely
+  most useful to make editable).
+
 ## ⚡ Quick Wins
 
 - [ ] **Potion stock check** `⚡ Easy`

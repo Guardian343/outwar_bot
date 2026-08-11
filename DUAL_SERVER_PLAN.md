@@ -84,24 +84,31 @@ behaviour changes until Phases 3–5 wire the second server in.
 
 ## PHASE 5 — Config, data model, cleanup
 
-- Settings: which servers are active; per-server alert-channel map. NOTE alert
-  channels are stored by ID (permanent across renames) — renaming channels does
-  NOT break settings. Per-server storage likely `alert_channel_<type>_<server>`
-  (e.g. alert_channel_summary_sigil / _torax) or a nested map.
-- **Data model — several things are implicitly Sigil today and need a server
-  dimension when Torax comes online:**
-  - **trustees/SSIDs**: an account/char is on a specific server. Trustees need a
-    `server_id` tag so crew lookups + `get_as` target the right host. Audit
-    `trustees.json` / ssids. (A crew name can exist on BOTH servers.)
-  - **summary_crews** (`db.get_summary_crews`): which crews appear in the daily
-    summary — must be per-server (Sigil summary vs Torax summary list differ).
-  - **focused crews** (⭐) + **focus drops** (`db.get_focus_drops`): focused-crew
-    tracking and yesterday's focus-drop rollup are per-server. The daily summary's
-    focus-drops line and the boss/crew status must read the right server's data.
-  - Migration: existing data is Sigil — tag it server_id=1 on first run so nothing
-    is lost, then let Torax data be added with server_id=2.
-- Sweep remaining hardcoded `sigil.outwar.com` (see list below) and route through
-  `host_for(server_id)`.
+**TRUSTEE SERVER-TAGGING — PARTLY DONE 2026-08-11 ✅ (bot side):**
+- Confirmed (Liam): trustees are PER-SERVER on Outwar — Sigil trustees show on
+  Sigil's myaccount, Torax on Torax's (separate pages). So the server tag comes
+  from WHICH server you scan, not page-parsing.
+- `db.get_trustees(server_id=None)` — migration-on-read: untagged trustee →
+  server 1 (Sigil). `get_trustees_by_crew(crew, server_id=None)` too.
+- `db.save_trustees_for_server(sid, list)` — replaces ONLY that server's trustees,
+  PRESERVES the others (a Sigil re-scan must not wipe Torax). Tags the batch.
+- `db.trustee_counts_by_server()` → {sid: count} for the dashboard.
+- `!scan-trustees` is server-aware: scans the myaccount of the channel's server
+  (default Sigil), enriches via that host, merge-saves. To populate Torax: run
+  `!scan-trustees` in a torax-prefixed channel.
+- Dashboard publish (auth.publish_settings_meta + status_writer): now writes
+  `channels_by_server` and `trustees` {total, by_server, server_names} to
+  status.json's settings_meta.
+- ⚠️ **DASHBOARD FRONT-END still needed (separate `deathbot_supervisor` repo):**
+  the data is now PUBLISHED to status.json, but rendering "N total / N Sigil /
+  N Torax trustees" and the per-server alert-channel list must be done in the
+  supervisor repo's dashboard HTML/JS. Not in this repo — do when we work there.
+
+- Settings: which servers are active; per-server alert-channel map. DONE via
+  Phase 2 (alert_channel_<type>_<server> keys, ID-based).
+- **Remaining data model:** summary_crews, focused crews (⭐), focus_drops still
+  implicitly Sigil — need per-server dimension (see Phase 3 summary note).
+- Sweep remaining hardcoded `sigil.outwar.com` (list below) via host_for(server_id).
 
 ---
 

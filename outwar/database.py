@@ -534,6 +534,73 @@ def _write_dict(filename: str, data: dict):
         json.dump(data, f, indent=2)
 
 
+# ---------------------------------------------------------------------------
+# ?top-all exclusions — runtime-editable (was a hardcoded list in constants.py).
+# Bot/alt accounts that should never appear in the top-all rankings. Stored in
+# top_exclusions.json as {"names": [...], "substrings": [...]}. On first read the
+# file is seeded from the legacy constant so nothing changes until it's edited;
+# after that it's fully managed at runtime via !top-exclude.
+# ---------------------------------------------------------------------------
+
+def get_top_exclusions() -> dict:
+    """Return {"names": set, "substrings": list}. Seeds from the constant on first
+    run so behaviour is unchanged until the list is edited via command."""
+    data = _read_dict("top_exclusions.json")
+    if not data:
+        # First run — seed from the legacy hardcoded constant, then persist so the
+        # constant is never needed again.
+        try:
+            from outwar.constants import (
+                TOP_ALL_EXCLUDED_NAMES as _seed_names,
+                TOP_ALL_EXCLUDED_SUBSTRINGS as _seed_subs,
+            )
+        except Exception:
+            _seed_names, _seed_subs = set(), []
+        data = {"names": sorted(_seed_names), "substrings": list(_seed_subs)}
+        _write_dict("top_exclusions.json", data)
+    return {
+        "names": {n.lower() for n in data.get("names", [])},
+        "substrings": [s.lower() for s in data.get("substrings", [])],
+    }
+
+
+def add_top_exclusion(value: str, is_substring: bool = False) -> bool:
+    """Add a name (or substring) to the top-all exclusion list. Returns True if
+    newly added, False if it was already present."""
+    data = _read_dict("top_exclusions.json") or {}
+    # Ensure it's seeded first so we don't drop the legacy entries.
+    get_top_exclusions()
+    data = _read_dict("top_exclusions.json") or {"names": [], "substrings": []}
+    key = "substrings" if is_substring else "names"
+    val = value.lower().strip()
+    current = [x.lower() for x in data.get(key, [])]
+    if val in current:
+        return False
+    data.setdefault(key, []).append(val)
+    if key == "names":
+        data["names"] = sorted(set(x.lower() for x in data["names"]))
+    _write_dict("top_exclusions.json", data)
+    return True
+
+
+def remove_top_exclusion(value: str) -> bool:
+    """Remove a name or substring from the exclusion list (checks both). Returns
+    True if something was removed."""
+    get_top_exclusions()  # ensure seeded
+    data = _read_dict("top_exclusions.json") or {"names": [], "substrings": []}
+    val = value.lower().strip()
+    removed = False
+    for key in ("names", "substrings"):
+        current = data.get(key, [])
+        new = [x for x in current if x.lower() != val]
+        if len(new) != len(current):
+            data[key] = new
+            removed = True
+    if removed:
+        _write_dict("top_exclusions.json", data)
+    return removed
+
+
 def record_raid_win(god_name: str, god_id: int, avg_power: int, avg_ele: int, member_count: int):
     """
     Record a winning raid's average power and ele.

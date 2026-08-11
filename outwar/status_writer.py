@@ -254,17 +254,21 @@ def publish_access(owner, admins, members):
         pass
 
 
-def publish_settings_meta(channels=None, envoy_pool=None, envoy_status=None):
-    """Publish dashboard settings context: resolved alert-channel names, the current
-    envoy loot pool (real number, no hardcode), and the loot roll status if rolling.
-    This is what the dashboard reads for the envoy pool display. Previously this
-    function was MISSING (auth.py called it inside try/except → silently failed →
-    orphaned envoy_pool_last stuck on the dashboard). Now implemented properly.
+def publish_settings_meta(channels=None, envoy_pool=None, envoy_status=None,
+                          channels_by_server=None, trustees=None):
+    """Publish dashboard settings context: resolved alert-channel names (flat +
+    per-server), trustee counts (total + per server), the current envoy loot pool,
+    and the loot roll status if rolling. Extra kwargs are additive so existing
+    callers keep working.
     """
     try:
         payload = {}
         if channels is not None:
             payload["channels"] = channels
+        if channels_by_server is not None:
+            payload["channels_by_server"] = channels_by_server
+        if trustees is not None:
+            payload["trustees"] = trustees
         if envoy_pool is not None:
             payload["envoy_pool_last"] = envoy_pool
             payload["envoy_pool_next"] = envoy_pool + 1

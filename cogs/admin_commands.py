@@ -189,42 +189,50 @@ class AdminCommands(commands.Cog):
     @commands.command(name="scan-trustees")
     async def scan_trustees(self, ctx):
         """
-        Scrape the bot account's trustee list from /myaccount and build trustees.json.
+        Scrape the bot account's trustee list from /myaccount and update
+        trustees.json for THIS server (resolved from the channel, default Sigil).
+        Only this server's trustees are replaced — the other server's are kept.
         Also fetches each character's crew, level and rage.
         """
-        await ctx.send("🔍 Scanning trustee list from Outwar...")
+        from outwar.servers import server_from_channel, name_for, host_for
+        server_id = server_from_channel(ctx.channel)
+        server_name = name_for(server_id)
+        await ctx.send(f"🔍 Scanning **{server_name}** trustee list from Outwar...")
 
-        # Fetch the myaccount page — this is where trustees are listed
-        html = await self.session.get("myaccount")
+        # Fetch the myaccount page ON THE RIGHT SERVER — trustees are per-server
+        # (Sigil trustees on Sigil's myaccount, Torax on Torax's).
+        html = await self.session.get("myaccount", server_id=server_id)
         raw_trustees = parse_trustee_list(html)
 
         if not raw_trustees:
             await ctx.send(
-                "⚠️ No trustees found on the myaccount page. "
-                "Make sure characters are trusteed to the bot account on Outwar, "
+                f"⚠️ No trustees found on the **{server_name}** myaccount page. "
+                "Make sure characters are trusteed to the bot account on that server, "
                 "then try again."
             )
             return
 
         await ctx.send(
-            f"Found **{len(raw_trustees)}** trustees. Fetching crew/level info... (this may take a moment)"
+            f"Found **{len(raw_trustees)}** {server_name} trustees. "
+            f"Fetching crew/level info... (this may take a moment)"
         )
 
         # Fetch each character's world page concurrently to get crew + level + rage
         semaphore = asyncio.Semaphore(10)  # limit concurrent requests
+        _host = host_for(server_id)
 
         async def _enrich(trustee: dict) -> dict:
             async with semaphore:
                 try:
                     from yarl import URL as _URL
-                    SIGIL_URL = _URL("https://sigil.outwar.com")
+                    HOST_URL = _URL(_host)
                     self.session._session.cookie_jar.update_cookies(
-                        {"ow_userid": str(trustee["suid"])}, response_url=SIGIL_URL
+                        {"ow_userid": str(trustee["suid"])}, response_url=HOST_URL
                     )
-                    profile_html = await self.session.get("profile")
+                    profile_html = await self.session.get("profile", server_id=server_id)
                     crew, level, rage, crew_id = parse_character_crew_and_level(profile_html)
                     self.session._session.cookie_jar.update_cookies(
-                        {"ow_userid": str(self.session.user_id)}, response_url=SIGIL_URL
+                        {"ow_userid": str(self.session.user_id)}, response_url=HOST_URL
                     )
                     trustee["crew"] = crew
                     trustee["rage"] = rage
@@ -239,8 +247,8 @@ class AdminCommands(commands.Cog):
         enriched = await asyncio.gather(*[_enrich(t) for t in raw_trustees])
         enriched = [t for t in enriched if t]
 
-        # Save to trustees.json
-        db.save_trustees(enriched)
+        # Save ONLY this server's trustees — preserves the other server's list.
+        db.save_trustees_for_server(server_id, enriched)
 
         # Summary embed
         crews: dict[str, int] = {}
@@ -249,8 +257,9 @@ class AdminCommands(commands.Cog):
             crews[crew] = crews.get(crew, 0) + 1
 
         embed = es.report_embed(
-            f"{es.ICON_REPORT} Trustees Scanned",
-            description=f"**{len(enriched)}** trustees saved to `database/trustees.json`"
+            f"{es.ICON_REPORT} {server_name} Trustees Scanned",
+            description=f"**{len(enriched)}** {server_name} trustees saved "
+                        f"(other servers' trustees preserved)."
         )
 
         crew_lines = "\n".join(

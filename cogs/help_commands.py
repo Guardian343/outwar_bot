@@ -109,6 +109,7 @@ CATEGORIES = {
             ("!show-mr <group|crew>",            "Show max rage for all characters in a group or crew"),
             ("!top <amount> <group> [stat]",     "Top N in a group. Stats: power/ele/chaos"),
             ("!top-all <amount> <stat>",         "Top N across all level 80+ trustees"),
+            ("!top-exclude list|add|remove",     "Manage accounts hidden from top-all (admin)"),
             ("!bottom <amount> <group> [stat]",  "Bottom N in a group"),
             ("!optimise <crew>",                 "Optimisation suggestions for a crew"),
         ]
