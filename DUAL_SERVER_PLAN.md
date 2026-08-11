@@ -52,25 +52,38 @@ behaviour changes until Phases 3–5 wire the second server in.
 - **BLOCKED ON:** Liam renaming channels to `sigil-*` / `torax-*` and telling the
   bot their IDs (or the bot auto-discovers by name prefix).
 
-## PHASE 3 — Monitors poll BOTH servers
+## PHASE 3 — Monitors poll BOTH servers (⚠️ hardest phase — do in SAFE SUB-PHASES)
 
-- `cogs/god_monitor.py`: the god/boss/envoy poll loops currently poll Sigil only
-  (hardcoded host + `ow_userid` cookie against `_SIGIL_URL`). Make each poll run
-  once per active server, passing `server_id`; post alerts to that server's
-  channel. The cookie-jar `ow_userid` set must target the correct host
-  (`host_for(server_id)`), not hardcoded Sigil.
-- Envoy rollover/auto-dump, leaderboards, countdown alerts → per server.
-- Boss spawns, god spawns → per server, per server's channel.
-- Embed "View »" links must use `host_for(server_id)`.
-- **DAILY SUMMARY must be built PER SERVER (Liam flagged).** `_post_daily_summary`
-  is a COMPOSITE — its three parts are all server-specific: (1) boss section
-  (`crew_bossspawns` fetch), (2) yesterday's focused-crew drops, (3) per-crew
-  summary (`summary_crews` loop + boss-raiding status). So the summary loop must
-  run ONCE PER ACTIVE SERVER: fetch that server's bosses via
-  `session.get("crew_bossspawns", server_id=N)`, read that server's focus drops +
-  summary crews, and post to that server's summary channel (`sigil-chat` /
-  `torax-chat`). Same format, different data per server. The only genuinely shared
-  bits would be non-game text; everything game-derived is per-server.
+Rationale for sub-phasing: the god monitor's state (`_last_gods`, caches) loads
+from the DB (god_state/boss_state/envoy_state) and threads through 3 change-
+processors. Converting to per-server touches the monitor AND the DB state layer —
+if Sigil's "was-spawned" state mixes with Torax's, you get FALSE spawn/despawn
+alerts. So: convert one subsystem at a time, each behaving identically on Sigil-
+only first, then enable Torax and watch. NEVER a single big sweep.
+
+**MASTER SWITCH:** `db.get_active_servers()` (defaults to [1] = Sigil only). Monitors
+loop over this. Torax stays dark until `db.set_active_servers([1,2])`. So all the
+per-server machinery can land + be tested while the bot still only polls Sigil.
+
+**SUB-PHASE 3a — server-aware DB state + master switch ✅ DONE 2026-08-11 (safe):**
+- `db.get_active_servers()` / `set_active_servers()` — defaults [1].
+- god/envoy/boss state functions take `server_id=1`: server 1 uses the LEGACY bare
+  key (`god_state`) so existing Sigil data is untouched; server 2+ uses suffixed
+  (`god_state_2`). Fully separate, tested. god_monitor's existing no-arg calls →
+  default Sigil → zero behaviour change.
+
+**SUB-PHASE 3b — god poll per server (NEXT):** make `_poll_gods(server_id)` +
+`_process_god_changes(gods, server_id)` (post to that server's channel via
+`_get_alert_channel("gods", server_id)`), loop `get_active_servers()`. Cookie-jar
+`ow_userid` set must target `host_for(server_id)`. `_gods_cache` → per-server dict.
+Test Sigil-only first (identical), then enable Torax.
+**SUB-PHASE 3c — boss poll per server.** Same pattern for bosses.
+**SUB-PHASE 3d — envoy per server** (rollover/auto-dump/leaderboards/countdown).
+**SUB-PHASE 3e — daily summary per server.** `_post_daily_summary` is a COMPOSITE
+(boss section + yesterday's focus drops + per-crew summary + boss-raid status) —
+all server-specific. Run the summary loop ONCE PER ACTIVE SERVER, fetch that
+server's bosses via `session.get("crew_bossspawns", server_id=N)`, read that
+server's focus drops + summary crews, post to that server's summary channel.
 
 ## PHASE 4 — Commands use the invoking channel's server
 

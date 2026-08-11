@@ -162,35 +162,20 @@ def delete_crew(name: str) -> bool:
 # Trustees
 # ---------------------------------------------------------------------------
 
-def get_trustees(server_id: int = None, include_excluded: bool = False) -> list[dict]:
-    """Return trustees, optionally filtered to one server, with excluded accounts
-    dropped by default.
+def get_trustees(server_id: int = None, include_excluded: bool = True) -> list[dict]:
+    """Return trustees, optionally filtered to one server.
 
-    - server_id: filter to that server (untagged trustee → server 1/Sigil).
-    - Excluded accounts (per-server, via !exclude) are removed unless
-      include_excluded=True. When server_id is given, that server's exclusion list
-      is used; with no server_id, ALL servers' exclusions are applied (safe union).
-    Pass include_excluded=True for the few places that need everything (!profile,
-    RGA stats). Reads fresh each call, so exclusions are LIVE.
+    Migration-on-read: any trustee without a `server_id` is treated as server 1
+    (Sigil). NOTE: exclusion is NOT applied here — excluded accounts are only
+    dropped by RAID (prime + boss) and OPTIMISE paths (see resolve_group and the
+    optimise/scores commands), so excluded accounts still appear in guard-start,
+    top lists, stats, etc. The include_excluded param is kept for signature
+    compatibility but has no effect here.
     """
     trustees = _read("trustees.json")
-    # Server filter first (untagged == server 1).
     if server_id is not None:
         sid = int(server_id)
         trustees = [t for t in trustees if int(t.get("server_id", 1)) == sid]
-    # Exclusion filter (per-server, live).
-    if not include_excluded:
-        if server_id is not None:
-            excl = {n.lower() for n in get_excluded(int(server_id))}
-        else:
-            # No server context → union of all servers' exclusions.
-            s = get_settings()
-            by_server = s.get("excluded_accounts_by_server") or {}
-            excl = {n.lower() for lst in by_server.values() for n in lst}
-            # include legacy flat list too, just in case
-            excl |= {n.lower() for n in s.get("excluded_accounts", [])}
-        if excl:
-            trustees = [t for t in trustees if t.get("name", "").lower() not in excl]
     return trustees
 
 
@@ -901,22 +886,32 @@ def set_md_cast(suid: int, name: str, cast_at: float):
 
 
 
-def resolve_group(group: str) -> list:
+def resolve_group(group: str, server_id: int = 1, apply_exclusions: bool = False) -> list:
     """Resolve a group/crew/name string to a list of trustee dicts.
     Resolution order: RGA group -> crew (by full name) -> exact account name.
-    Single canonical implementation (was duplicated verbatim across
-    misc_commands, utility_commands, raid_commands, and inline in boss raids)."""
+
+    apply_exclusions: OFF by default so most callers (lists, stats, guard, utility)
+    get the FULL roster. RAID paths pass apply_exclusions=True so excluded accounts
+    aren't raided. Exclusion is per-server (server_id).
+    """
     all_trustees = get_trustees()
     rga_group = get_group(group)
     if rga_group:
         names = set(group_to_list(rga_group))
-        return [t for t in all_trustees if t["name"] in names]
-    crew = get_crew(group)
-    crew_full = crew["full_name"] if crew else normalize_crew(group)
-    by_crew = get_trustees_by_crew(crew_full)
-    if by_crew:
-        return by_crew
-    return [t for t in all_trustees if t["name"].lower() == group.lower()]
+        result = [t for t in all_trustees if t["name"] in names]
+    else:
+        crew = get_crew(group)
+        crew_full = crew["full_name"] if crew else normalize_crew(group)
+        by_crew = get_trustees_by_crew(crew_full)
+        if by_crew:
+            result = by_crew
+        else:
+            result = [t for t in all_trustees if t["name"].lower() == group.lower()]
+    if apply_exclusions:
+        excl = {n.lower() for n in get_excluded(server_id)}
+        if excl:
+            result = [t for t in result if t["name"].lower() not in excl]
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -1984,8 +1984,10 @@ class RaidCommands(commands.Cog):
             )
 
     def _resolve_group(self, group: str) -> list:
-        # Delegates to the single canonical impl in database.resolve_group
-        return db.resolve_group(group)
+        # Delegates to the canonical impl; RAIDS exclude accounts on the exclude
+        # list (prime raids shouldn't raid excluded alts). Sigil default for now;
+        # Phase 4 will pass the channel's server.
+        return db.resolve_group(group, apply_exclusions=True)
 
     async def _check_group_caps(self, trustees: list, required_caps: int) -> tuple[list, list, str]:
         """
