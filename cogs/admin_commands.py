@@ -199,10 +199,28 @@ class AdminCommands(commands.Cog):
         server_name = name_for(server_id)
         await ctx.send(f"🔍 Scanning **{server_name}** trustee list from Outwar...")
 
-        # Fetch the myaccount page ON THE RIGHT SERVER — trustees are per-server
-        # (Sigil trustees on Sigil's myaccount, Torax on Torax's).
-        html = await self.session.get("myaccount", server_id=server_id)
+        # The trustee list is server-specific and selected by the `ac_serverid`
+        # param on myaccount.php (ALL on the Sigil host — it's an account-level
+        # The trustee list is server-specific, selected by `ac_serverid` on
+        # myaccount.php. The switch is STATEFUL (persists in the session), and
+        # works from either host. ac_serverid=1=Sigil, 2=Torax. Fetching bare
+        # "myaccount" returned the CURRENT server's list (gave Sigil's 751 for
+        # both). We switch explicitly, then read the switched page.
+        html = await self.session.get(f"myaccount.php?ac_serverid={server_id}")
         raw_trustees = parse_trustee_list(html)
+
+        # Sanity signal: if a Torax scan returns the exact Sigil count, the switch
+        # likely didn't take (session not carrying the switch). Warn but continue —
+        # the count in the next message lets Liam verify (Sigil ~751, Torax ~500-550).
+        sigil_count = len(db.get_trustees(server_id=1))
+        if server_id != 1 and len(raw_trustees) == sigil_count and sigil_count > 0:
+            await ctx.send(
+                f"⚠️ **Warning:** the {server_name} scan returned **{len(raw_trustees)}** "
+                f"trustees — the SAME as Sigil ({sigil_count}). The server switch may "
+                f"not have taken effect in the bot's session. Check the count below "
+                f"carefully before trusting it (expected ~500-550 for Torax). If it's "
+                f"wrong, DON'T worry — this scan only replaces {server_name} data."
+            )
 
         if not raw_trustees:
             await ctx.send(
@@ -217,9 +235,13 @@ class AdminCommands(commands.Cog):
             f"Fetching crew/level info... (this may take a moment)"
         )
 
-        # Fetch each character's world page concurrently to get crew + level + rage
+        # Fetch each character's profile for crew + level + rage. The session is
+        # already switched to `server_id` via ac_serverid above, and that switch is
+        # on the Sigil host — so all these fetches use the normal (default) host and
+        # the switched account context. No per-request host switching needed.
         semaphore = asyncio.Semaphore(10)  # limit concurrent requests
-        _host = host_for(server_id)
+        from outwar.servers import host_for as _host_for
+        _host = _host_for(1)  # ac_serverid switch lives on the Sigil host
 
         async def _enrich(trustee: dict) -> dict:
             async with semaphore:
@@ -229,7 +251,7 @@ class AdminCommands(commands.Cog):
                     self.session._session.cookie_jar.update_cookies(
                         {"ow_userid": str(trustee["suid"])}, response_url=HOST_URL
                     )
-                    profile_html = await self.session.get("profile", server_id=server_id)
+                    profile_html = await self.session.get("profile")
                     crew, level, rage, crew_id = parse_character_crew_and_level(profile_html)
                     self.session._session.cookie_jar.update_cookies(
                         {"ow_userid": str(self.session.user_id)}, response_url=HOST_URL
@@ -246,6 +268,14 @@ class AdminCommands(commands.Cog):
 
         enriched = await asyncio.gather(*[_enrich(t) for t in raw_trustees])
         enriched = [t for t in enriched if t]
+
+        # IMPORTANT: the ac_serverid switch is stateful — the session is now on
+        # `server_id`. Switch back to Sigil (1) so the bot's normal operations
+        # aren't left pointed at Torax. Always do this, even if server_id was 1.
+        try:
+            await self.session.get("myaccount.php?ac_serverid=1")
+        except Exception as e:
+            logger.warning("ADMIN", f"Failed to switch session back to Sigil after scan: {e}")
 
         # Save ONLY this server's trustees — preserves the other server's list.
         db.save_trustees_for_server(server_id, enriched)
