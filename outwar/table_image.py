@@ -683,3 +683,47 @@ def render_compare_table(char1: dict, char2: dict) -> io.BytesIO:
         rows.append({"stat": label, "val1": _fmt(v1), "val2": _fmt(v2), "c1": c1, "c2": c2})
 
     return render_table("CHARACTER COMPARE", f"{name1} vs {name2}", columns, rows)
+
+
+def render_crew_caps_table(crew_name: str, rows: list[dict]) -> io.BytesIO:
+    """Render a whole-crew cap table: Character / Caps / Next Cap only. Built for big
+    crews (up to ~200 members) from a single crew_capstatus scrape. rows: list of
+    {name, used, max, next_cap}."""
+    total = len(rows)
+    capped = sum(1 for r in rows if r.get("max", 0) > 0 and r["used"] >= r["max"])
+    available = total - capped
+
+    def cap_color(row):
+        mx = row.get("max", 0)
+        if mx == 0:
+            return TEXT_DIM
+        if row["used"] >= mx:
+            return TEXT_RED
+        if row["used"] / mx >= 0.8:
+            return TEXT_ORANGE
+        return TEXT_GREEN
+
+    def name_color(row):
+        mx = row.get("max", 0)
+        if mx and row["used"] >= mx:
+            return TEXT_RED
+        return TEXT_WHITE
+
+    columns = [
+        {"key": "name",     "label": "Character", "align": "left",   "color_fn": name_color},
+        {"key": "caps_str", "label": "Caps",      "align": "center", "color_fn": cap_color},
+        {"key": "next_cap", "label": "Next Cap",  "align": "center", "color_fn": lambda r: TEXT_DIM},
+    ]
+    table_rows = []
+    for r in rows:
+        table_rows.append({
+            "name":     r["name"],
+            "caps_str": f"{r['used']}/{r['max']}" if r.get("max") else "—",
+            "next_cap": r.get("next_cap", "—"),
+            "used":     r.get("used", 0),
+            "max":      r.get("max", 0),
+        })
+
+    subtitle = f"{capped} CAPPED  ·  {available} AVAILABLE  ·  {total} MEMBERS"
+    footer = f"{crew_name} — whole-crew cap status"
+    return render_table(f"CREW CAPS — {crew_name.upper()}", subtitle, columns, table_rows, footer)

@@ -579,13 +579,83 @@ class GroupStatCommands(commands.Cog):
         # Delegates to the single canonical impl in database.resolve_group
         return db.resolve_group(group)
 
+    def _resolve_crew_name(self, name: str):
+        """If `name` refers to a crew (by alias like 'gv'/'lod' or by matching a crew
+        that trustees belong to), return (stored_crew_name, a_trustee_in_it). Else
+        (None, None). Used to switch !pcaps into whole-crew mode."""
+        import re
+        def _norm(s):
+            return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+        key = _norm(name)
+        trustees = db.get_trustees()
+        # Build the set of crews trustees are actually in (normalised → display name)
+        crew_by_norm = {}
+        for t in trustees:
+            c = t.get("crew", "")
+            if c:
+                crew_by_norm.setdefault(_norm(c), c)
+        # 1) alias match (gv → Gorilla Voltage), then normalise the alias target
+        alias_target = db.CREW_ALIASES.get(name.lower())
+        if alias_target and _norm(alias_target) in crew_by_norm:
+            key = _norm(alias_target)
+        # 2) direct crew-name match
+        if key in crew_by_norm:
+            stored = crew_by_norm[key]
+            member = next((t for t in trustees if _norm(t.get("crew", "")) == key
+                           and t.get("suid")), None)
+            if member:
+                return stored, member
+        return None, None
+
+    async def _pcaps_whole_crew(self, ctx, crew_name: str, member: dict):
+        """Show Character / Caps / Next Cap for every member of a crew, from ONE
+        crew_capstatus fetch (acting as a trustee in that crew). Handles big crews
+        (up to ~200) — caps-focused columns only, no per-account fetching."""
+        from outwar.scraper import parse_crew_cap_status
+        from outwar.table_image import render_crew_caps_table
+        import discord
+
+        suid = member.get("suid")
+        msg = await ctx.send(f"⏳ Fetching crew caps for **{crew_name}**…")
+        try:
+            html = await self.session.get_as("crew_capstatus", int(suid))
+            caps = parse_crew_cap_status(html)
+        except Exception as e:
+            await msg.edit(content=f"❌ Couldn't fetch crew caps: {e}")
+            return
+        if not caps:
+            await msg.edit(content=f"❌ No crew cap data found for **{crew_name}** "
+                                   f"(is the account still in that crew?).")
+            return
+
+        # Build rows: name, used/max, next-cap (only when used > 0)
+        rows = []
+        for name, d in caps.items():
+            used, mx = d.get("used", 0), d.get("max", 0)
+            nxt = d.get("next_expiry") if (d.get("next_expiry") and used > 0) else "—"
+            rows.append({"name": name, "used": used, "max": mx, "next_cap": nxt})
+        # Sort: fully capped first (used==max), then by most-used
+        rows.sort(key=lambda r: (-(r["used"] == r["max"] and r["max"] > 0), -r["used"]))
+
+        buf = render_crew_caps_table(crew_name, rows)
+        await msg.delete()
+        await ctx.send(file=discord.File(buf, filename="crew_cap_status.png"))
+
     @commands.command(name="pcaps")
     async def prime_caps(self, ctx, *, group: str):
-        """Show prime god cap status for all characters in a group. Usage: !pcaps <group>"""
+        """Cap status for a group, OR a whole crew. Usage: !pcaps <group> | !pcaps <crew>
+        (crew shows Character/Caps/Next Cap for every member in one fetch)."""
         from outwar.scraper import parse_god_cap, parse_character_stats_profile, parse_rage
         from outwar.table_image import render_caps_table
         from yarl import URL
         import discord
+
+        # Whole-crew mode: if the name resolves to a crew, show its full member caps
+        # from a single crew_capstatus fetch (no per-account scraping).
+        crew_name, crew_member = self._resolve_crew_name(group)
+        if crew_name and crew_member:
+            await self._pcaps_whole_crew(ctx, crew_name, crew_member)
+            return
 
         trustees = self._resolve_group(group)
         if not trustees:
