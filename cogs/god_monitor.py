@@ -1325,7 +1325,7 @@ class GodMonitor(commands.Cog):
     @commands.command(name="set-alert-channel")
     async def set_alert_channel(self, ctx, alert_type: str, channel: discord.TextChannel = None):
         """Set the alert channel for gods, bosses or envoys."""
-        valid_types = ("gods", "bosses", "envoys", "drops", "summary", "log")
+        valid_types = ("gods", "bosses", "envoys", "drops", "summary", "log", "primewatcher")
         alert_type = alert_type.lower()
         if alert_type not in valid_types:
             await ctx.send(f"Unknown type `{alert_type}`. Valid: {', '.join(valid_types)}")
@@ -1338,7 +1338,7 @@ class GodMonitor(commands.Cog):
     async def alert_channels(self, ctx):
         """Show all configured alert channels."""
         embed = es.info_embed("⚙️ Alert Channel Configuration")
-        for alert_type in ("gods", "bosses", "envoys", "drops", "summary", "log"):
+        for alert_type in ("gods", "bosses", "envoys", "drops", "summary", "log", "primewatcher"):
             channel_id = db.get_alert_channel(alert_type)
             if channel_id:
                 ch = self.bot.get_channel(channel_id)

@@ -588,11 +588,12 @@ class PrimeWatcher(commands.Cog):
 
     async def _report_channel(self, w):
         """Resolve where to post normal watcher output: the watcher's OWN channel,
-        else the gods/summary alert channel. Deliberately does NOT fall back to the
-        `log` channel — that's for errors only (see _error_channel). Otherwise
-        setting a log channel silently steals every watcher's routine alerts."""
+        else the dedicated `primewatcher` alert channel, else gods/summary. Does NOT
+        use the `log` channel (that's errors only, via _error_channel). Historically
+        primewatcher rode on the `log` key — repointing log moved the alerts, so it
+        now has its own `primewatcher` alert type."""
         candidates = [w.get("channel")]
-        for key in ("gods", "god", "summary"):
+        for key in ("primewatcher", "gods", "god", "summary"):
             try:
                 candidates.append(db.get_alert_channel(key))
             except Exception:

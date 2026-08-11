@@ -248,7 +248,7 @@ class AuthCommands(commands.Cog):
             # (that IS Sigil); server 2+ only uses its per-server key.
             channels_by_server = {}
             flat_channels = {}   # legacy shape kept for back-compat with the dashboard
-            for atype in ("gods", "bosses", "envoys", "drops", "summary", "log"):
+            for atype in ("gods", "bosses", "envoys", "drops", "summary", "log", "primewatcher"):
                 for sid in SERVER_NAMES:
                     cid = db.get_alert_channel(atype, server_id=sid)
                     resolved = _resolve(cid)
