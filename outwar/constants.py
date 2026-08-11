@@ -556,3 +556,18 @@ GIVEAWAY_USERS = {
     "dq":     542182498801680384,
     "ppb":    486402907411972109,
 }
+
+
+# ---------------------------------------------------------------------------
+# Markdown (MD) skill timing — Level 10 MD.
+# MD runs a fixed 648-minute cycle from cast: ~264 min active, then cooldown.
+# You CANNOT recast until the full cycle completes. These are the single source
+# of truth; boss_raid_commands imports them (was hardcoding 648/264/384).
+#   MD_TOTAL_CYCLE_MINS  = full cycle from cast (active + cooldown)
+#   MD_ACTIVE_MINS       = how long MD stays active after cast
+#   MD_COOLDOWN_MINS     = the cooldown-only tail (TOTAL - ACTIVE); used as the
+#                          "still active if remaining > this" threshold
+# ---------------------------------------------------------------------------
+MD_TOTAL_CYCLE_MINS = 648
+MD_ACTIVE_MINS      = 264
+MD_COOLDOWN_MINS    = MD_TOTAL_CYCLE_MINS - MD_ACTIVE_MINS   # 384

@@ -1145,7 +1145,7 @@ class GodMonitor(commands.Cog):
                 preview = (sse_data or "")[:300]
                 await drops_channel.send(f"\u26a0\ufe0f **{envoy.name}** no loot parsed. SSE preview: ```{preview}```")
                 return
-            total_items = sum(len(e.get("items", [])) for e in loot_by_crew)
+            total_items = sum((e.get("drop_count") or len(e.get("items", []))) for e in loot_by_crew)
             # Build trustee name set for highlighting
             trustee_names = {t["name"].lower() for t in db.get_trustees()}
 
@@ -1161,7 +1161,10 @@ class GodMonitor(commands.Cog):
                     continue
                 is_trustee = winner.lower() in trustee_names
                 star   = f"{es.ICON_STAR} " if is_trustee else ""
-                header = f"{star}{winner} — {len(items)} item{'s' if len(items) != 1 else ''}"
+                # Use drop_count (TRUE number of drops — "Sword x3" = 3) not len(items)
+                # (which counts display lines — "Sword x3" = 1). Same fix as god summary.
+                n_drops = entry.get("drop_count") or len(items)
+                header = f"{star}{winner} — {n_drops} item{'s' if n_drops != 1 else ''}"
                 embed.add_field(name=header[:256], value=es.bullet_list(items)[:1024], inline=False)
                 if len(embed.fields) == 25:
                     part += 1

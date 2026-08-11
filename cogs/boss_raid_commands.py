@@ -17,7 +17,7 @@ from datetime import datetime
 from yarl import URL
 
 from outwar import database as db
-from outwar.constants import Skill
+from outwar.constants import Skill, MD_TOTAL_CYCLE_MINS, MD_ACTIVE_MINS, MD_COOLDOWN_MINS
 from outwar.scraper import parse_bosses
 from cogs import embed_style as es
 from outwar import logger
@@ -69,11 +69,11 @@ ROTATING_SKILLS = {Skill.STRENGTH_IN_NUMBERS}
 # Cooldown counts down while skill is active — so total time from cast = duration + cooldown_remaining
 SKILL_COOLDOWNS = {
     Skill.LAST_STAND: 162 * 60,   # 162 mins cooldown after expiry
-    Skill.MARKDOWN:   648 * 60,   # 648 mins cooldown after expiry (NOT from cast)
+    Skill.MARKDOWN:   MD_TOTAL_CYCLE_MINS * 60,   # 648 mins from cast (NOT from expiry)
 }
 
-MD_ACTIVE_SECS = 264 * 60   # 4h 24m — Level 10 MD duration
-MD_TOTAL_CYCLE_SECS = SKILL_COOLDOWNS[Skill.MARKDOWN]  # 648 mins from cast (includes active + true cooldown)
+MD_ACTIVE_SECS = MD_ACTIVE_MINS * 60   # 4h 24m — Level 10 MD duration
+MD_TOTAL_CYCLE_SECS = SKILL_COOLDOWNS[Skill.MARKDOWN]  # 648 mins from cast (active + true cooldown)
 
 
 def md_status_from_cast(cast_at: float, now: float = None) -> tuple[str, float]:
@@ -1358,9 +1358,9 @@ class BossRaidCommands(commands.Cog):
                             if "recharging" in html.lower():
                                 cd_m2 = _re2.search(r"(\d+)\s*minutes?\s*remaining", html, _re2.I)
                                 remaining = int(cd_m2.group(1)) if cd_m2 else 0
-                                if remaining > 384:
+                                if remaining > MD_COOLDOWN_MINS:
                                     # Still active — back-calculate and store its real cast_at
-                                    elapsed_mins = 648 - remaining
+                                    elapsed_mins = MD_TOTAL_CYCLE_MINS - remaining
                                     inferred_cast_at = now_for_check - elapsed_mins * 60
                                     db.set_md_cast(suid, t["name"], inferred_cast_at)
                                     return t, "ready", 0
@@ -1368,12 +1368,12 @@ class BossRaidCommands(commands.Cog):
                                     # Effectively zero remaining — genuinely ready, not cooldown.
                                     # Don't classify as "cooldown" with a near-zero wait, that
                                     # creates a tight loop (immediate "recharged" -> instant recheck).
-                                    elapsed_mins = 648 - remaining
+                                    elapsed_mins = MD_TOTAL_CYCLE_MINS - remaining
                                     inferred_cast_at = now_for_check - elapsed_mins * 60
                                     db.set_md_cast(suid, t["name"], inferred_cast_at)
                                     return t, "ready", 0
                                 # Genuinely on cooldown — back-calculate cast_at too
-                                elapsed_mins = 648 - remaining
+                                elapsed_mins = MD_TOTAL_CYCLE_MINS - remaining
                                 inferred_cast_at = now_for_check - elapsed_mins * 60
                                 db.set_md_cast(suid, t["name"], inferred_cast_at)
                                 return t, "cooldown", remaining

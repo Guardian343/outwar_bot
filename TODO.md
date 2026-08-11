@@ -89,9 +89,11 @@ Last updated: 2026-08-02
   **Action:** add a per-raid timing log (form/join/launch/fetch) FIRST to confirm the join is the cost,
   then cautiously raise concurrency and watch for join rate-limiting. Do NOT change blind.
 
-- [ ] **Apply drop-count fix to the envoy drop summary** `⚡ Easy`
-  `god_monitor.py` envoy summary still counts line items (`len(items)`), the same bug just fixed on the
-  god summary. Switch it to the parser's `drop_count`.
+- [x] **Apply drop-count fix to the envoy drop summary** ✅ DONE 2026-08-11
+  `god_monitor.py` envoy summary now uses each entry's `drop_count` (TRUE count — "Sword x3" = 3) for both
+  the per-winner header and the total, instead of `len(items)` (display lines — "Sword x3" = 1). Same fix
+  as the god summary. Safe fallback to len(items) if drop_count is ever missing. parse_prime_god_loot
+  already returns drop_count per entry.
 
 - [ ] **Background task lifecycle — boss change** `🟡 Medium`
   When a boss dies and a new one spawns, the previous cycle's `_cast_boss_pots_bg` / `_recast_ls_bg`
@@ -102,15 +104,18 @@ Last updated: 2026-08-02
   `import re`, `from bs4 import BeautifulSoup`, scraper imports etc. appear inside async functions in
   several cogs. Cached so not a perf issue, but messy. **Fix:** move to file-level imports.
 
-- [ ] **Audit silent `except: pass` blocks** `🟡 Medium`
-  We've been bitten TWICE by silent failures: (1) envoy auto-fetch dead code, (2) the dashboard pool
-  publisher (`status_writer.publish_settings_meta` doesn't exist; auth.py's call fails silently). A
-  bare `except: pass` hides real breakage. **Fix:** hunt down these blocks and make them at least LOG
-  (logger.warning) so bugs surface instead of vanishing. Do carefully — some may be intentional.
+- [ ] **Audit silent `except: pass` blocks** `🟡 Medium` — ⚠️ NEEDS OWNER JUDGMENT (not an unsupervised job)
+  Surveyed 2026-08-11: 131 `except: pass`/`except Exception: pass` blocks across the codebase. MOST are
+  intentional best-effort (failure genuinely doesn't matter) — blindly logging all 131 would create noise
+  and risk. The HIGH-RISK category (like the publish_settings_meta bug) is silent failures wrapping
+  saves/publishes/critical writes. Do this WITH Liam: go through the critical-path ones (settings/publish/
+  save/state writes) and make those log (logger.warning); leave cosmetic best-effort ones alone. Left for a
+  guided session — per-block judgment needed.
 
-- [ ] **Centralise MD constants** `🟡 Medium`
-  `648` (total MD cooldown) and `264` (MD active) live in `boss_raid_commands.py`. Add `MD_TOTAL_MINS`,
-  `MD_ACTIVE_MINS`, `MD_THRESHOLD_MINS` to `constants.py` and import from there.
+- [x] **Centralise MD constants** ✅ DONE 2026-08-11 (safe refactor, zero behaviour change)
+  Added `MD_TOTAL_CYCLE_MINS` (648), `MD_ACTIVE_MINS` (264), `MD_COOLDOWN_MINS` (384) to constants.py.
+  boss_raid_commands.py imports them; replaced hardcoded 648×3 + the 384 threshold; SKILL_COOLDOWNS +
+  MD_ACTIVE_SECS/MD_TOTAL_CYCLE_SECS now derive from them. Values verified identical (38880/15840/384).
 
 - [ ] **Raid history logging** `🟡 Medium`
   Save every raid attempt (boss, group, damage, char count, timestamp) to JSON. Add `!boss-history`.
@@ -155,9 +160,10 @@ Last updated: 2026-08-02
   Currently orange at 80% caps used. Liam may drop to 70% after testing, OR switch to an absolute
   "caps remaining ≤ N" rule (more consistent across max caps 10/11/12/13, directly answers "can I still
   raid this account?"). One-line change either way.
-- [ ] **`!god set <name> room 0` = clear** `⚡ Easy`
-  Adds an "unset manual room" so a stale event-prime override can fall back to table/crawl again. Manual
-  room currently wins over everything, so there's no way to clear it except setting the correct table value.
+- [x] **`!god set <name> room 0` = clear** ✅ DONE 2026-08-11
+  `!god set <name> room 0` now clears the manual room override (sets room=None) so `_resolve_god_room`
+  falls back to the GOD_ROOMS table / crawl_mobs lookup again. Previously the manual room always won with
+  no way to un-set a stale event-prime override.
 
 ## 💡 Suggested Ideas (streamlining — make the bot easy for new members)
 

@@ -565,6 +565,15 @@ class RaidCommands(commands.Cog):
         try:
             if field in ("recommended", "hp", "rec_power", "rec_ele", "rec_chaos", "room"):
                 value = int(value.replace(",", ""))
+            # room 0 = CLEAR the manual override, so the god falls back to the
+            # GOD_ROOMS table / crawl_mobs lookup (_resolve_god_room) again. The
+            # manual room otherwise always wins, leaving no way to un-set a stale
+            # event-prime override except guessing the correct table value.
+            if field == "room" and value == 0:
+                db.update_prime_god(god["god_id"], {"room": None})
+                await ctx.send(f"✅ **{god['name']}** — manual room cleared "
+                               f"(falls back to table/crawl lookup now).")
+                return
             updates = {field: value}
             if field == "recommended":
                 updates["recommended_custom"] = True
