@@ -565,6 +565,27 @@ class PrimeWatcher(commands.Cog):
             except Exception as e:
                 logger.error("PW", f"scheduler cycle error: {e}")
 
+    async def _error_channel(self):
+        """Resolve the dedicated log/error channel for primewatcher error messages.
+        Prefers the 'log' alert channel; if that isn't set, falls back to summary,
+        then to None (rather than leaking errors into gods/focused channels).
+        Errors should NOT cascade into focused-crew or primewatcher channels."""
+        for key in ("log", "summary"):
+            try:
+                cid = db.get_alert_channel(key)
+            except Exception:
+                cid = None
+            if not cid:
+                continue
+            ch = self.bot.get_channel(int(cid))
+            if ch:
+                return ch
+            try:
+                return await self.bot.fetch_channel(int(cid))
+            except Exception:
+                continue
+        return None
+
     async def _report_channel(self, w):
         """Resolve where to post: the watcher's own channel, else the Log/#primewatcher
         alert channel, else summary/gods. Falls back to fetch_channel on a cache miss."""
@@ -598,8 +619,11 @@ class PrimeWatcher(commands.Cog):
                 await self._run_cycle(w, dry_run, ch)
             except Exception as e:
                 logger.error("PW", f"cycle error for {w.get('name')}: {e}")
-                if ch:
-                    await ch.send(f"⚠️ Prime Watcher **{w.get('name')}** cycle error: `{e}`")
+                # Errors go to the dedicated log/error channel, NOT the watcher's
+                # focused/report channel (which is for results, not error noise).
+                err_ch = await self._error_channel()
+                if err_ch:
+                    await err_ch.send(f"⚠️ Prime Watcher **{w.get('name')}** cycle error: `{e}`")
 
     @staticmethod
     def _crew_caps_on_spawn(page, crew):

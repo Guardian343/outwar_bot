@@ -62,6 +62,15 @@ behaviour changes until Phases 3–5 wire the second server in.
 - Envoy rollover/auto-dump, leaderboards, countdown alerts → per server.
 - Boss spawns, god spawns → per server, per server's channel.
 - Embed "View »" links must use `host_for(server_id)`.
+- **DAILY SUMMARY must be built PER SERVER (Liam flagged).** `_post_daily_summary`
+  is a COMPOSITE — its three parts are all server-specific: (1) boss section
+  (`crew_bossspawns` fetch), (2) yesterday's focused-crew drops, (3) per-crew
+  summary (`summary_crews` loop + boss-raiding status). So the summary loop must
+  run ONCE PER ACTIVE SERVER: fetch that server's bosses via
+  `session.get("crew_bossspawns", server_id=N)`, read that server's focus drops +
+  summary crews, and post to that server's summary channel (`sigil-chat` /
+  `torax-chat`). Same format, different data per server. The only genuinely shared
+  bits would be non-game text; everything game-derived is per-server.
 
 ## PHASE 4 — Commands use the invoking channel's server
 
@@ -75,11 +84,22 @@ behaviour changes until Phases 3–5 wire the second server in.
 
 ## PHASE 5 — Config, data model, cleanup
 
-- Settings: which servers are active; per-server alert-channel map.
-- **Data model:** trustees/SSIDs may need a `server_id` field (an account/char is
-  on a specific server). Today trustees are implicitly Sigil. When Torax accounts
-  are added, they need tagging so crew lookups and `get_as` target the right host.
-  Audit `trustees.json` / `ssids` for this.
+- Settings: which servers are active; per-server alert-channel map. NOTE alert
+  channels are stored by ID (permanent across renames) — renaming channels does
+  NOT break settings. Per-server storage likely `alert_channel_<type>_<server>`
+  (e.g. alert_channel_summary_sigil / _torax) or a nested map.
+- **Data model — several things are implicitly Sigil today and need a server
+  dimension when Torax comes online:**
+  - **trustees/SSIDs**: an account/char is on a specific server. Trustees need a
+    `server_id` tag so crew lookups + `get_as` target the right host. Audit
+    `trustees.json` / ssids. (A crew name can exist on BOTH servers.)
+  - **summary_crews** (`db.get_summary_crews`): which crews appear in the daily
+    summary — must be per-server (Sigil summary vs Torax summary list differ).
+  - **focused crews** (⭐) + **focus drops** (`db.get_focus_drops`): focused-crew
+    tracking and yesterday's focus-drop rollup are per-server. The daily summary's
+    focus-drops line and the boss/crew status must read the right server's data.
+  - Migration: existing data is Sigil — tag it server_id=1 on first run so nothing
+    is lost, then let Torax data be added with server_id=2.
 - Sweep remaining hardcoded `sigil.outwar.com` (see list below) and route through
   `host_for(server_id)`.
 

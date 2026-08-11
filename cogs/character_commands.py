@@ -73,7 +73,18 @@ class CharacterCommands(commands.Cog):
 
     @commands.command(name="get-sessid")
     async def get_session_id(self, ctx):
-        await ctx.send(f"SessionId = `{self.session.session_id}`")
+        """Show the bot's current Outwar session ID plus a clickable login link.
+        Reads the server from the channel (sigil-*/torax-*), defaulting to Sigil."""
+        from outwar.servers import host_for, name_for, server_from_channel
+        ssid = self.session.session_id
+        suid = self.session.user_id
+        server_id = server_from_channel(ctx.channel)
+        host = host_for(server_id)
+        parts = [f"SessionId = `{ssid}`"]
+        if ssid and suid:
+            link = f"{host}/home?rg_sess_id={ssid}&suid={suid}&serverid={server_id}"
+            parts.append(f"🔗 [Open as this account on {name_for(server_id)}]({link})")
+        await ctx.send("\n".join(parts))
 
     # ------------------------------------------------------------------
     # Stats
