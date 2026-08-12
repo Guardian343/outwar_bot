@@ -474,6 +474,27 @@ class OutwarSession:
 
         return result.html
 
+    async def get_server(self, path: str, server_id: int = DEFAULT_SERVER) -> str:
+        """Read-only GET for a specific server using the bot's OWN rg_sess_id + suid
+        as per-request URL params (cookieless), NOT the stateful cookie session.
+
+        This is the concurrency-safe way to poll multiple servers: because the
+        server is a URL param (serverid=N) on each request, Sigil and Torax fetches
+        are fully independent and can run at the same time without the stateful
+        ac_serverid switch colliding. Proven viable by !server-probe (Sigil vs Torax
+        returned different data). Used by the per-server monitors (Phase 3).
+
+        Falls back to the normal cookie get() if the bot's ssid/suid aren't available
+        (so it still works, just via the default-server cookie path).
+        """
+        ssid = getattr(self, "session_id", None)
+        suid = getattr(self, "user_id", None)
+        if not ssid or not suid:
+            # No ssid yet (pre-login) — fall back to the cookie path for server 1.
+            return await self.get(path, server_id=server_id)
+        from outwar import ssid_store
+        return await ssid_store.sess_get(path, ssid, suid, server_id)
+
     async def get_as(self, path: str, suid: int, *, server_id: int = DEFAULT_SERVER) -> str:
         """Read-only GET as a specific trustee. Safe to retry."""
         result = await self.request_result(
@@ -536,8 +557,16 @@ class OutwarSession:
         Fetch an SSE endpoint with an extended timeout and graceful handling
         of TransferEncodingError — the loot data is usually complete by the
         time the error fires. server_id selects the game server.
+
+        For non-default servers we append the bot's own rg_sess_id + suid +
+        serverid as per-request params (cookieless), so the stream authenticates
+        correctly on Torax too (the cookie session is logged into Sigil only).
         """
         url = f"{host_for(server_id)}/{path.lstrip('/')}"
+        if server_id != DEFAULT_SERVER and self.session_id and self.user_id:
+            sep = "&" if "?" in url else "?"
+            url = (f"{url}{sep}rg_sess_id={self.session_id}"
+                   f"&suid={self.user_id}&serverid={int(server_id)}")
         timeout = aiohttp.ClientTimeout(total=timeout_secs)
 
         try:

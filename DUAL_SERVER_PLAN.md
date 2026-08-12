@@ -72,11 +72,24 @@ per-server machinery can land + be tested while the bot still only polls Sigil.
   (`god_state_2`). Fully separate, tested. god_monitor's existing no-arg calls →
   default Sigil → zero behaviour change.
 
-**SUB-PHASE 3b — god poll per server (NEXT):** make `_poll_gods(server_id)` +
-`_process_god_changes(gods, server_id)` (post to that server's channel via
-`_get_alert_channel("gods", server_id)`), loop `get_active_servers()`. Cookie-jar
-`ow_userid` set must target `host_for(server_id)`. `_gods_cache` → per-server dict.
-Test Sigil-only first (identical), then enable Torax.
+**SUB-PHASE 3b — god poll per server ✅ DONE 2026-08-11 (built while Liam asleep; SAFE, Sigil-identical):**
+- NEW primitive `session.get_server(path, server_id)` — per-request cookieless fetch
+  using the bot's OWN rg_sess_id + suid + serverid (via ssid_store.sess_get). This
+  is the concurrency-safe multi-server fetch proven by !server-probe. Falls back to
+  cookie get() pre-login.
+- `_poll_gods()` now loops `db.get_active_servers()` → `_poll_gods_for(server_id)`:
+  fetches primegods via get_server, per-server caches (`_gods_cache[sid]`), per-server
+  state. Dashboard god publish + envoy rollover guarded to server 1 (Sigil) for now.
+- `_process_god_changes(gods, server_id)`: per-server state (get/save_god_state(sid)),
+  posts to `_get_alert_channel("gods", server_id)`, embed links use host_for(server_id).
+- `_post_god_drops(channel, god, server_id)` + `get_sse(..., server_id)` server-aware
+  (SSE appends bot's rg_sess_id/suid/serverid for non-Sigil).
+- `_process_envoy_changes(envoys, server_id)` — accepts server_id but early-returns for
+  non-Sigil (full envoy conversion is 3d). Caches made dict-consistent.
+- VERIFIED: parses + loads; with active_servers=[1] behaves EXACTLY as before (legacy
+  god_state key, Sigil-only loop). Torax state separate, only touched if enabled.
+- TO TEST TORAX: `db.set_active_servers([1,2])` (no command yet — add in 3c/3d or via a
+  quick setter command) then watch torax-gods. Requires torax-gods alert channel set.
 **SUB-PHASE 3c — boss poll per server.** Same pattern for bosses.
 **SUB-PHASE 3d — envoy per server** (rollover/auto-dump/leaderboards/countdown).
 **SUB-PHASE 3e — daily summary per server.** `_post_daily_summary` is a COMPOSITE

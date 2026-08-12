@@ -103,8 +103,9 @@ class GodMonitor(commands.Cog):
         self._last_gods: dict[str, bool] = {}
         self._last_envoys: dict[str, bool] = {}
         self._last_bosses: dict[str, bool] = {}
-        self._gods_cache: list[God] = []
-        self._envoys_cache: list = []
+        # Per-server live caches (keyed by server_id). Server 1 = Sigil.
+        self._gods_cache: dict = {}
+        self._envoys_cache: dict = {}
         self._monitor_running = False
         self._last_god_poll = None  # tracks last half-hour window polled
         self._envoy_cycle_end_ts = None  # last-seen envoy cycle-end unix ts (rollover detection)
@@ -286,7 +287,7 @@ class GodMonitor(commands.Cog):
             god_channel = await self._get_alert_channel("gods")
             html = await self.session.get("primegods")
             gods = parse_gods(html)
-            self._gods_cache = gods
+            self._gods_cache[1] = gods
 
             if god_channel:
                 spawned = [g for g in gods if g.spawned]
@@ -324,22 +325,36 @@ class GodMonitor(commands.Cog):
     # ------------------------------------------------------------------
 
     async def _poll_gods(self):
-        try:
-            html = await self.session.get("primegods")
-            gods = parse_gods(html)
-            envoys = parse_envoys(html)
-            self._gods_cache = gods
-            self._envoys_cache = envoys
-            status_writer.publish_gods(gods)  # dashboard: live god roster + HP
-            await self._process_god_changes(gods)
-            await self._process_envoy_changes(envoys)
-            # Rollover auto-capture (isolated — never disturbs the monitor above).
+        """Poll gods for every ACTIVE server (defaults to [1]=Sigil). Each server is
+        polled independently via the concurrent-safe per-request fetch, so Sigil and
+        Torax never collide. State + caches + alert channels are all per-server."""
+        for server_id in db.get_active_servers():
+            try:
+                await self._poll_gods_for(server_id)
+            except Exception as e:
+                logger.warning("GOD_MONITOR",
+                               f"God poll error (server {server_id}): {e}")
+
+    async def _poll_gods_for(self, server_id: int):
+        html = await self.session.get_server("primegods", server_id)
+        gods = parse_gods(html)
+        envoys = parse_envoys(html)
+        self._gods_cache[server_id] = gods
+        self._envoys_cache[server_id] = envoys
+        # Dashboard god roster is still Sigil-only for now (dashboard overhaul, Phase 6,
+        # will make it per-server). Only publish server 1 to avoid Torax overwriting it.
+        if server_id == 1:
+            status_writer.publish_gods(gods)
+        await self._process_god_changes(gods, server_id)
+        await self._process_envoy_changes(envoys, server_id)
+        # Rollover auto-capture (isolated — never disturbs the monitor above).
+        # Envoy rollover is currently Sigil-only logic; guard to server 1 until the
+        # envoy sub-phase (3d) makes it per-server.
+        if server_id == 1:
             try:
                 await self._check_envoy_rollover()
             except Exception as e:
                 logger.warning("GOD_MONITOR", f"Envoy rollover check error: {e}")
-        except Exception as e:
-            logger.warning("GOD_MONITOR", f"God monitor poll error: {e}")
 
     async def _check_envoy_rollover(self):
         """Detect an envoy cycle rollover by watching the cycle-end timestamp on
@@ -497,21 +512,24 @@ class GodMonitor(commands.Cog):
     # Change processing
     # ------------------------------------------------------------------
 
-    async def _process_god_changes(self, gods: list[God]):
+    async def _process_god_changes(self, gods: list, server_id: int = 1):
         # Same guard as envoys: an empty parse is a page failure, not a real
         # state. Wiping the baseline would lose the next spawn/death transition.
         if not gods:
             logger.warning("GOD_MONITOR", "God parse returned nothing — keeping previous state")
             return
 
-        channel = await self._get_alert_channel("gods")
+        from outwar.servers import host_for
+        host = host_for(server_id)
+        channel = await self._get_alert_channel("gods", server_id)
+        last_gods = db.get_god_state(server_id)
         new_state = {}
         just_spawned = []
         just_died = []
 
         for god in gods:
             new_state[god.name] = god.spawned
-            was_spawned = self._last_gods.get(god.name)
+            was_spawned = last_gods.get(god.name)
             if was_spawned is None:
                 continue
             if not was_spawned and god.spawned:
@@ -526,7 +544,7 @@ class GodMonitor(commands.Cog):
                                   else f"• **{g.name}**" for g in just_spawned)
                 embed = es.spawn_embed(
                     f"{es.ICON_SPAWN} Prime God{'s' if len(just_spawned) > 1 else ''} Spawned",
-                    description=f"{names}\n\n[View Prime Gods »](http://sigil.outwar.com/primegods)"
+                    description=f"{names}\n\n[View Prime Gods »]({host}/primegods)"
                 )
                 await channel.send(embed=embed)
 
@@ -538,14 +556,14 @@ class GodMonitor(commands.Cog):
 
                 async def _resolve_loot_link(g):
                     try:
-                        god_html = await self.session.get(f"primegods?mobid={g.god_id}")
+                        god_html = await self.session.get_server(f"primegods?mobid={g.god_id}", server_id)
                         data     = parse_prime_god_page(god_html)
                         loot_url = data.get("loot_url")
                         if loot_url:
                             sm = _re_loot.search(r"spawnid=(\d+)", loot_url)
                             if sm:
                                 spawnid = sm.group(1)
-                                return f"• [**{g.name}**](http://sigil.outwar.com/primegod_loot?spawnid={spawnid})"
+                                return f"• [**{g.name}**]({host}/primegod_loot?spawnid={spawnid})"
                     except Exception as e:
                         logger.warning("GOD_MONITOR", f"[GODS] Could not resolve loot link for {g.name}: {e}")
                     # Fallback: name with no link rather than a broken link
@@ -560,12 +578,16 @@ class GodMonitor(commands.Cog):
 
                 # Fire drops as independent background tasks
                 for god in just_died:
-                    asyncio.create_task(self._post_god_drops(channel, god))
+                    asyncio.create_task(self._post_god_drops(channel, god, server_id))
 
-        self._last_gods = new_state
-        db.save_god_state(new_state)
+        db.save_god_state(new_state, server_id)
 
-    async def _process_envoy_changes(self, envoys):
+    async def _process_envoy_changes(self, envoys, server_id: int = 1):
+        # NOTE: envoy processing is still Sigil-centric; full per-server conversion
+        # is sub-phase 3d. For now it only acts for server 1 so Torax envoy polls
+        # don't post Sigil-shaped envoy alerts prematurely.
+        if server_id != 1:
+            return
         # A failed or partial page parse yields no envoys. The roster is fixed
         # (8 envoys always exist), so an empty list is ALWAYS a parse failure,
         # never a real state. Overwriting the baseline with {} would wipe it —
@@ -1179,9 +1201,9 @@ class GodMonitor(commands.Cog):
             logger.warning("GOD_MONITOR", f"[DROPS] Error posting envoy drops for {envoy.name}: {e}")
             logger.info("GOD_MONITOR", traceback.format_exc())
 
-    async def _post_god_drops(self, channel, god: God):
+    async def _post_god_drops(self, channel, god, server_id: int = 1):
         try:
-            god_html = await self.session.get(f"primegods?mobid={god.god_id}")
+            god_html = await self.session.get_server(f"primegods?mobid={god.god_id}", server_id)
             data     = parse_prime_god_page(god_html)
             loot_url = data.get("loot_url")
             if not loot_url:
@@ -1201,7 +1223,7 @@ class GodMonitor(commands.Cog):
             sse_data = None
             for attempt in range(5):
                 try:
-                    sse_data = await self.session.get_sse(sse_url)
+                    sse_data = await self.session.get_sse(sse_url, server_id=server_id)
                     if sse_data and len(sse_data) > 50:
                         break
                     logger.info("GOD_MONITOR", f"[DROPS] SSE attempt {attempt+1} too short: {len(sse_data) if sse_data else 0}")
@@ -1321,6 +1343,33 @@ class GodMonitor(commands.Cog):
     # ------------------------------------------------------------------
     # Commands
     # ------------------------------------------------------------------
+
+    @commands.command(name="active-servers")
+    async def active_servers_cmd(self, ctx, *servers):
+        """View or set which servers the monitors poll. DEFAULTS to Sigil only.
+        Usage: !active-servers                → show current
+               !active-servers sigil          → Sigil only
+               !active-servers sigil torax     → both (enables Torax monitoring)
+        ⚠️ Enabling Torax means the god poll will start monitoring Torax too —
+        make sure torax-gods (etc.) alert channels are set first."""
+        from outwar.servers import resolve_server, name_for, SERVER_NAMES
+        if not servers:
+            active = db.get_active_servers()
+            names = ", ".join(name_for(s) for s in active)
+            await ctx.send(f"🌐 Monitors currently poll: **{names}** "
+                           f"(server ids {active}).")
+            return
+        ids = []
+        for s in servers:
+            sid = resolve_server(s, None)
+            if sid is None or sid not in SERVER_NAMES:
+                await ctx.send(f"Unknown server `{s}`. Use: sigil, torax.")
+                return
+            ids.append(sid)
+        db.set_active_servers(ids)
+        names = ", ".join(name_for(s) for s in sorted(set(ids)))
+        await ctx.send(f"✅ Monitors will now poll: **{names}**. "
+                       f"{'⚠️ Make sure that server’s alert channels are set!' if 2 in ids else ''}")
 
     @commands.command(name="set-alert-channel")
     async def set_alert_channel(self, ctx, alert_type: str, channel: discord.TextChannel = None):
@@ -1572,7 +1621,7 @@ class GodMonitor(commands.Cog):
         await ctx.send("🔍 Checking Envoys...")
         html = await self.session.get("primegods")
         envoys = parse_envoys(html)
-        self._envoys_cache = envoys
+        self._envoys_cache[1] = envoys
 
         if not envoys:
             await ctx.send("No envoys found on the page.")
@@ -1788,12 +1837,14 @@ class GodMonitor(commands.Cog):
 
     async def envoy_drops(self, ctx, *, envoy_name: str):
         """Fetch and display drops for an envoy."""
-        if not self._envoys_cache:
+        cache = self._envoys_cache.get(1) or []
+        if not cache:
             html = await self.session.get("primegods")
-            self._envoys_cache = parse_envoys(html)
+            cache = parse_envoys(html)
+            self._envoys_cache[1] = cache
 
         envoy = next(
-            (e for e in self._envoys_cache if envoy_name.lower() in e.name.lower()),
+            (e for e in cache if envoy_name.lower() in e.name.lower()),
             None
         )
         if not envoy:

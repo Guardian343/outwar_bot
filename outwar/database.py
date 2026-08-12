@@ -428,6 +428,28 @@ def is_excluded(name: str, server_id: int = 1) -> bool:
 # Alert channels
 # ---------------------------------------------------------------------------
 
+def get_active_servers() -> list:
+    """Which servers the monitors should poll. DEFAULTS TO [1] (Sigil only) so the
+    bot's live behaviour is unchanged until Torax is explicitly enabled. Returns a
+    sorted list of int server ids."""
+    s = get_settings()
+    vals = s.get("active_servers", [1])
+    out = []
+    for v in vals:
+        try:
+            out.append(int(v))
+        except (ValueError, TypeError):
+            pass
+    return sorted(set(out)) or [1]
+
+
+def set_active_servers(server_ids: list):
+    """Set which servers the monitors poll. Pass e.g. [1, 2] to enable Sigil+Torax."""
+    settings = get_settings()
+    settings["active_servers"] = sorted({int(x) for x in server_ids})
+    save_settings(settings)
+
+
 def get_alert_channel(alert_type: str, server_id: int = None) -> Optional[int]:
     """Get the Discord channel ID for an alert type (gods, bosses, envoys, …).
     Per-server aware: with server_id, reads `alert_channel_<type>_<server_id>`,
@@ -459,34 +481,42 @@ def set_alert_channel(alert_type: str, channel_id: int, server_id: int = None):
 # God/Envoy spawn state tracking
 # ---------------------------------------------------------------------------
 
-def get_god_state() -> dict:
-    return get_settings().get("god_state", {})
+def _state_key(base: str, server_id: int) -> str:
+    """State settings key for a server. Server 1 (Sigil) uses the LEGACY bare key
+    (`god_state`) so existing data is untouched; server 2+ uses a suffixed key
+    (`god_state_2`). Keeps each server's spawn-tracking state fully separate."""
+    sid = int(server_id)
+    return base if sid == 1 else f"{base}_{sid}"
 
 
-def save_god_state(state: dict):
+def get_god_state(server_id: int = 1) -> dict:
+    return get_settings().get(_state_key("god_state", server_id), {})
+
+
+def save_god_state(state: dict, server_id: int = 1):
     settings = get_settings()
-    settings["god_state"] = state
+    settings[_state_key("god_state", server_id)] = state
     save_settings(settings)
 
 
-def get_envoy_state() -> dict:
-    return get_settings().get("envoy_state", {})
+def get_envoy_state(server_id: int = 1) -> dict:
+    return get_settings().get(_state_key("envoy_state", server_id), {})
 
 
-def save_envoy_state(state: dict):
+def save_envoy_state(state: dict, server_id: int = 1):
     settings = get_settings()
-    settings["envoy_state"] = state
+    settings[_state_key("envoy_state", server_id)] = state
     save_settings(settings)
 
 
-def get_boss_state() -> dict:
-    """Returns dict of {boss_full_name: spawned_bool} from last poll."""
-    return get_settings().get("boss_state", {})
+def get_boss_state(server_id: int = 1) -> dict:
+    """Returns dict of {boss_full_name: spawned_bool} from last poll, per server."""
+    return get_settings().get(_state_key("boss_state", server_id), {})
 
 
-def save_boss_state(state: dict):
+def save_boss_state(state: dict, server_id: int = 1):
     settings = get_settings()
-    settings["boss_state"] = state
+    settings[_state_key("boss_state", server_id)] = state
     save_settings(settings)
 
 
