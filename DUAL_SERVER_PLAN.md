@@ -54,6 +54,72 @@ behaviour changes until Phases 3–5 wire the second server in.
 
 ## PHASE 3 — Monitors poll BOTH servers (⚠️ hardest phase — do in SAFE SUB-PHASES)
 
+### ⚠️⚠️ CRITICAL TORAX-AUTH FINDINGS (2026-08-12) — READ BEFORE TOUCHING TORAX ⚠️⚠️
+
+A morning of live debugging established how Torax access ACTUALLY works. The earlier
+per-request-param approach was WRONG and briefly broke live Sigil monitoring. The
+facts, now proven:
+
+1. **The account's "current server" is SINGULAR and lives on Outwar's side.** The
+   `myaccount.php?ac_serverid=N` switch is stateful and ACCOUNT-LEVEL, not per-request.
+   When the bot logs in, it comes up as whatever server the account was last switched
+   to. This morning the bot logged in as suid 933209 (Torax) because earlier probing/
+   scanning had left the account switched to Torax — which BROKE Sigil (bot was acting
+   as its Torax identity on the Sigil host → all Sigil pages returned the ~41KB
+   not-logged-in fallback, no alerts fired).
+
+2. **The bot account (LoDRaid) has a DIFFERENT suid per server:**
+   - Sigil: **1157932**  ·  Torax: **933209**
+   (Same rg_sess_id works on both — it's the SUID that differs. Sending the Sigil suid
+   to Torax yields the fallback page; this was the whole Torax-read failure.)
+
+3. **The single-login / single-cookie-jar model can only be on ONE server at a time.**
+   Confirmed by Liam: same RGA in ONE browser can't do both servers; but **Firefox on
+   Torax + Chrome on Sigil, same account, works concurrently.** The difference is the
+   COOKIE JAR — two isolated jars = two independent sessions = both servers at once.
+   One shared jar = the switch overwrites itself = one server at a time.
+
+4. **RECOVERY PROCEDURE if the bot is stuck on the wrong server** (login shows the
+   wrong suid, Sigil alerts dead): use `!get-sessid` to get the bot's SSID link, open
+   it, hit `https://sigil.outwar.com/myaccount.php?ac_serverid=1` to switch the account
+   back to Sigil, restart the bot. Login then picks up 1157932 and Sigil is healthy.
+   (Proven this morning — no code needed.)
+
+### ✅ THE CORRECT ARCHITECTURE (to build): TWO SESSIONS, ONE PER SERVER ("two browsers")
+
+The bot must hold **two independent session objects, each with its OWN aiohttp cookie
+jar** — the code equivalent of Chrome-on-Sigil + Firefox-on-Torax:
+- **Sigil session** = the bot's CURRENT session, untouched. Own jar, suid 1157932,
+  on Sigil. Works exactly as today. NEVER modified by Torax work (so Sigil can't break
+  again).
+- **Torax session** = a NEW second session object. Own isolated jar, logs in with the
+  SAME credentials, switches ITSELF to Torax (`ac_serverid=2`), holds Torax's cookies +
+  suid 933209. Because its jar is isolated, switching it to Torax does NOT touch the
+  Sigil session — just like Firefox switching doesn't affect Chrome.
+- Monitors pick the session by server: Sigil monitor → Sigil session; Torax monitor →
+  Torax session. Fully concurrent, ONE login per server (Liam's requirement), no
+  interference.
+
+This REPLACES the failed `get_server`/cookieless-param approach for real Torax reads.
+(`get_server` currently routes Sigil→cookie path, Torax→cookieless — the Torax branch
+is the part that doesn't truly authenticate and must be swapped for the 2nd session.)
+
+**BUILD STEPS (do DELIBERATELY, not live-hacked — this morning showed live session
+hacking knocks out Sigil):**
+1. A second session instance (reuse OutwarSession with its own jar, or a subclass) that
+   logs in, switches to Torax, and re-reads suid 933209. Add keep-alive / re-login on
+   expiry, and a switch-to-Torax-on-init.
+2. PROVE it on a probe FIRST: the Torax session fetches `primegods` and returns the
+   REAL ~92KB / 43-row page (NOT the 41KB fallback) before wiring anything live.
+3. Wire the Torax monitor (`_poll_gods_for(2)` etc.) to use the Torax session.
+4. Keep the Sigil session 100% untouched throughout. Test with active_servers=[1] first
+   (Sigil-only, must be identical), then [1,2].
+
+**Data storage is ALREADY split and does NOT need cloning** — per-server keys
+(`god_state_2`, `excluded_accounts_by_server`, trustee `server_id` tags, per-server
+alert channels) all exist. One DB, keyed by server. The blocker was only ever the live
+SESSION, never the storage.
+
 Rationale for sub-phasing: the god monitor's state (`_last_gods`, caches) loads
 from the DB (god_state/boss_state/envoy_state) and threads through 3 change-
 processors. Converting to per-server touches the monitor AND the DB state layer —
@@ -88,8 +154,13 @@ per-server machinery can land + be tested while the bot still only polls Sigil.
   non-Sigil (full envoy conversion is 3d). Caches made dict-consistent.
 - VERIFIED: parses + loads; with active_servers=[1] behaves EXACTLY as before (legacy
   god_state key, Sigil-only loop). Torax state separate, only touched if enabled.
-- TO TEST TORAX: `db.set_active_servers([1,2])` (no command yet — add in 3c/3d or via a
-  quick setter command) then watch torax-gods. Requires torax-gods alert channel set.
+- ⚠️ **3b's Torax path (get_server cookieless) does NOT actually authenticate on Torax**
+  — see the CRITICAL TORAX-AUTH FINDINGS above. The god-poll per-server STRUCTURE is
+  correct and Sigil-safe, but the Torax fetch must be swapped to use the 2nd (Torax)
+  session once that's built. Sigil path (cookie) is fine and proven.
+- `get_server` was fixed to route server 1 → cookie path (Sigil, rock-solid) and only
+  non-default → cookieless. This is why Sigil is safe; the cookieless Torax branch is
+  the placeholder to be replaced by the 2nd-session fetch.
 **SUB-PHASE 3c — boss poll per server.** Same pattern for bosses.
 **SUB-PHASE 3d — envoy per server** (rollover/auto-dump/leaderboards/countdown).
 **SUB-PHASE 3e — daily summary per server.** `_post_daily_summary` is a COMPOSITE

@@ -3,6 +3,16 @@ Last updated: 2026-08-02
 
 ## 🔴 Critical (Fix Before Next Major Session)
 
+- [ ] **🌐 TORAX = build a SECOND session (own cookie jar), suid 933209** `🔴 Hard` — the
+  big one. Proven 2026-08-12: the account's server is singular on Outwar's side; single-
+  session bot can only be on one server at a time (single cookie jar). Firefox+Chrome
+  test confirms two ISOLATED cookie jars = both servers concurrently. So Torax needs a
+  2nd session object (same login, own jar, switched to Torax, suid 933209), Sigil session
+  left untouched. Per-server suids: Sigil 1157932 / Torax 933209. get_server's cookieless
+  Torax branch does NOT truly auth — replace with the 2nd session. FULL DETAIL +
+  build steps + recovery procedure in DUAL_SERVER_PLAN.md (Phase 3 header). Build
+  DELIBERATELY (live session-hacking broke Sigil this morning); prove on a probe first.
+
 - [x] **⚠️ database.py was OUT OF SYNC with pushed cogs** — FIXED 2026-08-11. The pushed auth.py/
   admin_commands.py called `db.get_alert_channel(type, server_id=…)`, `db.save_trustees_for_server`,
   `db.trustee_counts_by_server` — but database.py (pushed separately) LACKED them → would crash on restart.
