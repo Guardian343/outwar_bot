@@ -509,9 +509,14 @@ class OutwarSession:
         Falls back to the cookie get() if the bot's ssid isn't available yet.
         """
         ssid = getattr(self, "session_id", None)
+        # Server 1 (Sigil) uses the PROVEN cookie session — that's the bot's logged-in
+        # home server and the cookie path is rock-solid. Only NON-default servers need
+        # the cookieless per-request path (different suid, can't use the Sigil cookie).
+        if int(server_id) == DEFAULT_SERVER:
+            return await self.get(path, server_id=server_id)
         suid = self._suid_for_server(server_id)
         if not ssid or not suid:
-            # No ssid yet (pre-login) — fall back to the cookie path for server 1.
+            # No ssid yet (pre-login) — fall back to the cookie path.
             return await self.get(path, server_id=server_id)
         from outwar import ssid_store
         return await ssid_store.sess_get(path, ssid, suid, server_id)
