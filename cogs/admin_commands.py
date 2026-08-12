@@ -199,14 +199,13 @@ class AdminCommands(commands.Cog):
         server_name = name_for(server_id)
         await ctx.send(f"🔍 Scanning **{server_name}** trustee list from Outwar...")
 
-        # The trustee list is server-specific and selected by the `ac_serverid`
-        # param on myaccount.php (ALL on the Sigil host — it's an account-level
-        # The trustee list is server-specific, selected by `ac_serverid` on
-        # myaccount.php. The switch is STATEFUL (persists in the session), and
-        # works from either host. ac_serverid=1=Sigil, 2=Torax. Fetching bare
-        # "myaccount" returned the CURRENT server's list (gave Sigil's 751 for
-        # both). We switch explicitly, then read the switched page.
-        html = await self.session.get(f"myaccount.php?ac_serverid={server_id}")
+        # Read the server-specific trustee list via the SAFE per-request method
+        # (serverid= + per-server suid), NOT ac_serverid. ac_serverid is the
+        # ACCOUNT-LEVEL switch — it flips the bot's server on Outwar's side and
+        # leaves it stuck there (broke Sigil on 2026-08-12). serverid= just selects
+        # which server the READ is for, without moving the account. (Confirmed by
+        # Freak: "there's no ac_ for regular URLs, it's just serverid= + suid".)
+        html = await self.session.get_server("myaccount", server_id)
         raw_trustees = parse_trustee_list(html)
 
         # Sanity signal: if a Torax scan returns the exact Sigil count, the switch
@@ -235,13 +234,13 @@ class AdminCommands(commands.Cog):
             f"Fetching crew/level info... (this may take a moment)"
         )
 
-        # Fetch each character's profile for crew + level + rage. The session is
-        # already switched to `server_id` via ac_serverid above, and that switch is
-        # on the Sigil host — so all these fetches use the normal (default) host and
-        # the switched account context. No per-request host switching needed.
+        # Fetch each character's profile for crew + level + rage. NOTE: enrichment
+        # still uses the cookie-session ow_userid approach, which is correct for
+        # SIGIL scans. Torax enrichment needs the per-server (serverid=+suid) method —
+        # refine when the Torax read path is proven end-to-end (deliberate Torax build).
         semaphore = asyncio.Semaphore(10)  # limit concurrent requests
         from outwar.servers import host_for as _host_for
-        _host = _host_for(1)  # ac_serverid switch lives on the Sigil host
+        _host = _host_for(1)
 
         async def _enrich(trustee: dict) -> dict:
             async with semaphore:
@@ -269,13 +268,8 @@ class AdminCommands(commands.Cog):
         enriched = await asyncio.gather(*[_enrich(t) for t in raw_trustees])
         enriched = [t for t in enriched if t]
 
-        # IMPORTANT: the ac_serverid switch is stateful — the session is now on
-        # `server_id`. Switch back to Sigil (1) so the bot's normal operations
-        # aren't left pointed at Torax. Always do this, even if server_id was 1.
-        try:
-            await self.session.get("myaccount.php?ac_serverid=1")
-        except Exception as e:
-            logger.warning("ADMIN", f"Failed to switch session back to Sigil after scan: {e}")
+        # (No server switch-back needed — we never switched the account. The scan
+        # reads via serverid= which doesn't move the account off Sigil.)
 
         # Save ONLY this server's trustees — preserves the other server's list.
         db.save_trustees_for_server(server_id, enriched)
