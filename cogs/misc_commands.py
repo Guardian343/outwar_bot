@@ -45,6 +45,67 @@ class MiscCommands(commands.Cog):
     # TEMPORARY DEBUG — dump raw envoy pages to inspect available signals.
     # Remove after we've designed the auto-fetch trigger.
     # ------------------------------------------------------------------
+    @commands.command(name="torax-auth-probe", hidden=True)
+    async def torax_auth_probe(self, ctx):
+        """OWNER PROBE: test how to AUTHENTICATE a session on Torax. Uses a fresh,
+        ISOLATED aiohttp session (its own cookie jar — like a 2nd browser), seeds it
+        with the bot's rg_sess_id cookie, performs the myaccount.php?ac_serverid=2
+        switch, then fetches `home` and reports whether it's the REAL page (~229KB)
+        or the fallback/login page (~41KB). This tells us if 'switch-in-an-isolated-
+        session' is how the bot holds a Torax session concurrently with Sigil.
+        Read-only, uses the bot's own credentials only."""
+        import aiohttp, hashlib, re as _re
+        ssid = getattr(self.session, "session_id", None)
+        suid = getattr(self.session, "user_id", None)
+        if not ssid:
+            await ctx.send("❌ No bot session_id available.")
+            return
+        await ctx.send("🔬 Torax auth probe: fresh isolated session → switch → fetch home…")
+
+        def _summ(h):
+            if not h:
+                return 0, "(empty)", "--------"
+            fp = hashlib.md5(h.encode("utf-8","ignore")).hexdigest()[:8]
+            rows = len(_re.findall(r"<tr", h, _re.I))
+            return len(h), f"{rows} rows", fp
+
+        report = []
+        # --- Approach A: isolated session, ac_serverid cookie + rg_sess_id cookie ---
+        try:
+            jar = aiohttp.CookieJar()
+            async with aiohttp.ClientSession(cookie_jar=jar) as sess:
+                # seed the bot's session cookie for both hosts
+                from yarl import URL
+                for host in ("https://sigil.outwar.com", "https://torax.outwar.com"):
+                    jar.update_cookies({"rg_sess_id": ssid, "ow_userid": str(suid)},
+                                       response_url=URL(host))
+                # 1) hit the switch on the sigil host
+                async with sess.get(f"https://sigil.outwar.com/myaccount.php?ac_serverid=2",
+                                    timeout=aiohttp.ClientTimeout(total=30)) as r:
+                    switch_html = await r.text()
+                # 2) now fetch home on the TORAX host in the same (switched) session
+                async with sess.get("https://torax.outwar.com/home",
+                                    timeout=aiohttp.ClientTimeout(total=30)) as r:
+                    torax_home = await r.text()
+                # 3) also try home on the sigil host after switch (does switch redirect?)
+                async with sess.get("https://sigil.outwar.com/home",
+                                    timeout=aiohttp.ClientTimeout(total=30)) as r:
+                    sigil_home = await r.text()
+            sl, si, sf = _summ(switch_html)
+            tl, ti, tf = _summ(torax_home)
+            gl, gi, gf = _summ(sigil_home)
+            report.append(f"**A: isolated session, switch then fetch**")
+            report.append(f"• switch page: {sl:,}b · {si} · `{sf}`")
+            report.append(f"• torax/home: {tl:,}b · {ti} · `{tf}`")
+            report.append(f"• sigil/home after switch: {gl:,}b · {gi} · `{gf}`")
+            real = tl > 100000  # real home is ~229KB
+            report.append(f"→ Torax home looks **{'REAL ✅' if real else 'like the fallback ⚠️'}** "
+                          f"({'authenticated!' if real else 'not authenticated'})")
+        except Exception as e:
+            report.append(f"A failed: {e}")
+
+        await ctx.send("\n".join(report)[:1900])
+
     @commands.command(name="server-probe", hidden=True)
     async def server_probe(self, ctx, path: str = "crew_bossspawns"):
         """OWNER PROBE: test whether the bot's OWN rg_sess_id works cookielessly with
