@@ -2115,8 +2115,8 @@ class GodMonitor(commands.Cog):
         except Exception as e:
             logger.warning("GOD_MONITOR", f"[DROPS] focus-drop record failed: {e}")
 
-    async def _get_alert_channel(self, alert_type: str):
-        channel_id = db.get_alert_channel(alert_type)
+    async def _get_alert_channel(self, alert_type: str, server_id: int = None):
+        channel_id = db.get_alert_channel(alert_type, server_id)
         if not channel_id:
             return None
         return self.bot.get_channel(channel_id)
