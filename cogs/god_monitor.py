@@ -1372,29 +1372,83 @@ class GodMonitor(commands.Cog):
                        f"{'⚠️ Make sure that server’s alert channels are set!' if 2 in ids else ''}")
 
     @commands.command(name="set-alert-channel")
-    async def set_alert_channel(self, ctx, alert_type: str, channel: discord.TextChannel = None):
-        """Set the alert channel for gods, bosses or envoys."""
+    async def set_alert_channel(self, ctx, alert_type: str, *args):
+        """Set the alert channel for a type, optionally per-server.
+        Usage:
+          !set-alert-channel gods                    → Sigil gods = this channel
+          !set-alert-channel gods #sigil-gods         → Sigil gods = #sigil-gods
+          !set-alert-channel gods #torax-gods torax   → Torax gods = #torax-gods
+          !set-alert-channel gods torax               → Torax gods = this channel
+        Server can be given as a word (sigil/torax); if omitted it's inferred from
+        the channel name prefix, else defaults to Sigil. IMPORTANT: a torax set
+        writes a SEPARATE per-server key — it does NOT overwrite the Sigil channel."""
+        from outwar.servers import resolve_server, name_for, SERVER_NAMES
         valid_types = ("gods", "bosses", "envoys", "drops", "summary", "log", "primewatcher")
         alert_type = alert_type.lower()
         if alert_type not in valid_types:
             await ctx.send(f"Unknown type `{alert_type}`. Valid: {', '.join(valid_types)}")
             return
-        target = channel or ctx.channel
-        db.set_alert_channel(alert_type, target.id)
-        await ctx.send(f"✅ **{alert_type.title()}** alerts will now post to {target.mention}")
+
+        # Parse args: an optional channel mention/reference and an optional server word.
+        target = None
+        server_id = None
+        for a in args:
+            # channel mention?
+            if a.startswith("<#") and a.endswith(">"):
+                try:
+                    target = ctx.guild.get_channel(int(a[2:-1]))
+                    continue
+                except Exception:
+                    pass
+            # server word?
+            sid = resolve_server(a, None)
+            if sid in SERVER_NAMES:
+                server_id = sid
+                continue
+            # maybe a raw channel name without #
+            ch = discord.utils.get(ctx.guild.text_channels, name=a.lstrip("#"))
+            if ch:
+                target = ch
+
+        target = target or ctx.channel
+        # Infer server from channel name prefix if not explicitly given.
+        if server_id is None:
+            lname = target.name.lower()
+            if lname.startswith("torax") or "torax" in lname:
+                server_id = 2
+            elif lname.startswith("sigil") or "sigil" in lname:
+                server_id = 1
+            else:
+                server_id = 1  # default Sigil
+
+        # Write: Sigil (1) uses the legacy flat key (back-compat); Torax (2+) uses the
+        # per-server key so it NEVER clobbers Sigil.
+        if server_id == 1:
+            db.set_alert_channel(alert_type, target.id)          # flat key
+        else:
+            db.set_alert_channel(alert_type, target.id, server_id)  # per-server key
+        await ctx.send(f"✅ **{name_for(server_id)} {alert_type.title()}** alerts will "
+                       f"now post to {target.mention}")
 
     @commands.command(name="alert-channels")
     async def alert_channels(self, ctx):
-        """Show all configured alert channels."""
+        """Show all configured alert channels, per server."""
+        from outwar.servers import name_for
         embed = es.info_embed("⚙️ Alert Channel Configuration")
-        for alert_type in ("gods", "bosses", "envoys", "drops", "summary", "log", "primewatcher"):
-            channel_id = db.get_alert_channel(alert_type)
-            if channel_id:
-                ch = self.bot.get_channel(channel_id)
-                value = ch.mention if ch else f"Unknown channel ({channel_id})"
-            else:
-                value = f"Not set — use `!set-alert-channel {alert_type}`"
-            embed.add_field(name=alert_type.title(), value=value, inline=False)
+        for server_id in (1, 2):
+            lines = []
+            for alert_type in ("gods", "bosses", "envoys", "drops", "summary", "log", "primewatcher"):
+                channel_id = db.get_alert_channel(alert_type, server_id)
+                if channel_id:
+                    ch = self.bot.get_channel(channel_id)
+                    val = ch.mention if ch else f"Unknown ({channel_id})"
+                    lines.append(f"**{alert_type}** → {val}")
+            if lines:
+                embed.add_field(name=f"🌐 {name_for(server_id)}",
+                                value="\n".join(lines), inline=False)
+            elif server_id == 2:
+                embed.add_field(name=f"🌐 {name_for(server_id)}",
+                                value="_No Torax channels set_", inline=False)
         await ctx.send(embed=embed)
 
     @commands.group(name="envoy", invoke_without_command=True)
