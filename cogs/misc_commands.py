@@ -105,6 +105,43 @@ class MiscCommands(commands.Cog):
 
         await ctx.send("\n".join(report)[:1900])
 
+    @commands.command(name="bot-suid", hidden=True)
+    async def botsuid_cmd(self, ctx, server: str = None, suid: int = None):
+        """OWNER: view or set the bot account's suid for a server. The same account
+        has a DIFFERENT suid per server (LoDRaid: 1157932 Sigil / 933209 Torax).
+        Torax reads need the Torax suid or they hit the not-logged-in fallback.
+        Usage:
+          !bot-suid                     → show current mapping
+          !bot-suid torax 933209         → set the Torax suid
+        After setting, use !server-probe primegods to confirm Torax returns real data."""
+        from outwar.servers import resolve_server, name_for
+        s = db.get_settings()
+        mapping = s.get("bot_suid_by_server", {}) or {}
+        if server is None:
+            sigil = getattr(self.session, "user_id", "?")
+            lines = [f"**Sigil (1):** {sigil} _(auto-detected at login)_"]
+            for sid, val in sorted(mapping.items()):
+                lines.append(f"**{name_for(int(sid))} ({sid}):** {val}")
+            if not mapping:
+                lines.append("_No per-server overrides set. Torax will use the Sigil "
+                             "suid and hit the fallback page until set._")
+            await ctx.send("🔑 Bot suid mapping:\n" + "\n".join(lines))
+            return
+        sid = resolve_server(server, None)
+        if not sid or sid == 1:
+            await ctx.send("Set a non-Sigil server, e.g. `!bot-suid torax 933209`. "
+                           "(Sigil's suid is auto-detected.)")
+            return
+        if suid is None:
+            await ctx.send(f"Usage: `!bot-suid {server} <suid>`")
+            return
+        mapping[str(sid)] = int(suid)
+        s["bot_suid_by_server"] = mapping
+        db.save_settings(s)
+        await ctx.send(f"✅ Set **{name_for(sid)}** bot suid to **{suid}**. "
+                       f"Now run `!server-probe primegods` — Torax should return REAL data "
+                       f"(different size, not the ~41KB fallback).")
+
     @commands.command(name="server-probe", hidden=True)
     async def server_probe(self, ctx, path: str = "crew_bossspawns"):
         """OWNER PROBE: test whether the bot's OWN rg_sess_id works cookielessly with
@@ -120,12 +157,14 @@ class MiscCommands(commands.Cog):
         if not ssid or not suid:
             await ctx.send("❌ Bot has no session_id/user_id available — can't probe.")
             return
-        await ctx.send(f"🔬 Probing `{path}` for both servers using the bot's own "
-                       f"ssid (suid {suid})…")
+        await ctx.send(f"🔬 Probing `{path}` for both servers using the bot's ssid + "
+                       f"per-server suid…")
         results = {}
         for sid in (1, 2):
             try:
-                html = await store.sess_get(path, ssid, suid, sid)
+                # Use the correct suid for each server (Sigil vs Torax differ).
+                server_suid = self.session._suid_for_server(sid)
+                html = await store.sess_get(path, ssid, server_suid, sid)
             except Exception as e:
                 html = f"__ERR__ {e}"
             results[sid] = html or ""

@@ -474,21 +474,42 @@ class OutwarSession:
 
         return result.html
 
+    def _suid_for_server(self, server_id: int) -> int:
+        """The bot account's suid ON A GIVEN SERVER. The same Outwar account has a
+        DIFFERENT suid per server (e.g. LoDRaid = 1157932 on Sigil, 933209 on Torax).
+        Using the Sigil suid on Torax makes Torax serve the not-logged-in fallback
+        page — which is why Torax reads failed until now.
+
+        server 1 → self.user_id (auto-detected at login).
+        server N → a configured override from settings `bot_suid_by_server` {"2":933209}.
+        Falls back to self.user_id if no override (so nothing breaks; it just won't
+        authenticate on that server until the suid is set)."""
+        if int(server_id) == DEFAULT_SERVER:
+            return self.user_id
+        try:
+            from outwar import database as db
+            mapping = db.get_settings().get("bot_suid_by_server", {}) or {}
+            val = mapping.get(str(int(server_id)))
+            if val:
+                return int(val)
+        except Exception:
+            pass
+        return self.user_id
+
     async def get_server(self, path: str, server_id: int = DEFAULT_SERVER) -> str:
-        """Read-only GET for a specific server using the bot's OWN rg_sess_id + suid
-        as per-request URL params (cookieless), NOT the stateful cookie session.
+        """Read-only GET for a specific server using the bot's OWN rg_sess_id + the
+        bot's suid FOR THAT SERVER as per-request URL params (cookieless).
 
-        This is the concurrency-safe way to poll multiple servers: because the
-        server is a URL param (serverid=N) on each request, Sigil and Torax fetches
-        are fully independent and can run at the same time without the stateful
-        ac_serverid switch colliding. Proven viable by !server-probe (Sigil vs Torax
-        returned different data). Used by the per-server monitors (Phase 3).
+        Concurrency-safe multi-server fetch: server is a URL param, so Sigil and
+        Torax fetches are independent and run concurrently (proven by the live
+        Outwar client running 1284 accounts across both servers at once). The
+        per-server suid is essential — the same account has a different suid on each
+        server, and using the wrong one yields the not-logged-in fallback page.
 
-        Falls back to the normal cookie get() if the bot's ssid/suid aren't available
-        (so it still works, just via the default-server cookie path).
+        Falls back to the cookie get() if the bot's ssid isn't available yet.
         """
         ssid = getattr(self, "session_id", None)
-        suid = getattr(self, "user_id", None)
+        suid = self._suid_for_server(server_id)
         if not ssid or not suid:
             # No ssid yet (pre-login) — fall back to the cookie path for server 1.
             return await self.get(path, server_id=server_id)
@@ -563,10 +584,11 @@ class OutwarSession:
         correctly on Torax too (the cookie session is logged into Sigil only).
         """
         url = f"{host_for(server_id)}/{path.lstrip('/')}"
-        if server_id != DEFAULT_SERVER and self.session_id and self.user_id:
+        if server_id != DEFAULT_SERVER and self.session_id:
+            suid = self._suid_for_server(server_id)
             sep = "&" if "?" in url else "?"
             url = (f"{url}{sep}rg_sess_id={self.session_id}"
-                   f"&suid={self.user_id}&serverid={int(server_id)}")
+                   f"&suid={suid}&serverid={int(server_id)}")
         timeout = aiohttp.ClientTimeout(total=timeout_secs)
 
         try:
