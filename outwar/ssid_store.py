@@ -228,10 +228,14 @@ async def fetch_roster(ssid: str, server_id: int = 1) -> list:
     """
     import aiohttp
     host = _SERVER_HOST.get(int(server_id), _SERVER_HOST[1])
-    # Use serverid= (read selector), NOT ac_serverid= (account-level switch that
-    # flips the account server-side and can strand the bot on the wrong server).
-    # Confirmed by Freak: regular URLs use serverid=, ac_ is only for login.
-    url = f"{host}/accounts.php?serverid={int(server_id)}&rg_sess_id={ssid}"
+    # accounts.php (the roster/accounts page) uses ac_serverid — this is the
+    # ORIGINAL working form. NOTE: this is safe here because it uses a TRUSTEE's
+    # ssid in a FRESH cookieless session (not the bot's session), so it switches
+    # that isolated request's context only — it does NOT flip the bot's account.
+    # (The bot-flipping earlier came from the auth-probe / trustee-scan using
+    # ac_serverid with the BOT's OWN session — those are removed. Game pages use
+    # serverid=; the accounts.php roster page needs ac_serverid.)
+    url = f"{host}/accounts.php?ac_serverid={int(server_id)}&rg_sess_id={ssid}"
     try:
         # Fresh session, no cookie jar shared with the bot — the param is the
         # only credential, exactly like the standalone tools.
@@ -262,7 +266,7 @@ async def validate_ssid(ssid: str, server_id: int = 1):
         except Exception:
             return ""
 
-    roster_html = await _fetch(f"{host}/accounts.php?serverid={int(server_id)}&rg_sess_id={ssid}")
+    roster_html = await _fetch(f"{host}/accounts.php?ac_serverid={int(server_id)}&rg_sess_id={ssid}")
     roster = parse_roster(roster_html)
     if not roster:
         return False, "", []

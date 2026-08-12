@@ -73,6 +73,7 @@ def _is_admin(bot, user_id: int) -> bool:
 class SsidCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self._expiry_strikes: dict[str, int] = {}  # did → consecutive empty-roster count
         self.expiry_poll.start()
 
     def cog_unload(self):
@@ -209,7 +210,9 @@ class SsidCommands(commands.Cog):
     async def expiry_poll(self):
         """
         Every ~15 min, check each stored SSID. An empty roster means it died
-        (fresh re-login) — DM the owner and remove the dead entry.
+        (fresh re-login). GUARD: require TWO consecutive empty checks before
+        removing, so a single failed/blipped roster read doesn't wrongly wipe a
+        live entry (a bad roster URL once nuked all stored SSIDs — never again).
         """
         try:
             entries = store.all_entries()
@@ -217,8 +220,19 @@ class SsidCommands(commands.Cog):
                 roster = await store.fetch_roster(e["ssid"], e.get("server_id", 1))
                 if roster:
                     store.mark_ok(int(did))
+                    self._expiry_strikes.pop(str(did), None)  # reset on success
                     continue
-                # Expired — alert the owner, then remove.
+                # Empty roster — count a strike. Only remove on the 2nd consecutive.
+                strikes = self._expiry_strikes.get(str(did), 0) + 1
+                self._expiry_strikes[str(did)] = strikes
+                if strikes < 2:
+                    logger.info("SSID", f"[EXPIRY] {e.get('rga','?')} (user {did}) "
+                                        f"empty roster (strike {strikes}/2) — will "
+                                        f"re-check next cycle before removing")
+                    await asyncio.sleep(1)
+                    continue
+                # 2nd consecutive empty — genuinely expired. Alert + remove.
+                self._expiry_strikes.pop(str(did), None)
                 user = self.bot.get_user(int(did))
                 if user:
                     try:
@@ -235,7 +249,7 @@ class SsidCommands(commands.Cog):
                         pass
                 store.remove_ssid(int(did))
                 logger.info("SSID", f"[EXPIRY] {e.get('rga', '?')} (user {did}) "
-                                    f"expired and was removed")
+                                    f"expired (2 consecutive empty checks) and was removed")
                 await asyncio.sleep(1)   # be gentle between checks
         except Exception as ex:
             logger.warning("SSID", f"expiry poll error: {ex}")
