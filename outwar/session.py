@@ -142,33 +142,6 @@ class OutwarSession:
         logger.info("SESSION", f"Got user_id from redirect: {self.user_id}")
         logger.info("SESSION", "Got session ID from cookie.")
 
-        # CRITICAL: the bot account may have been left switched to another server
-        # (the ac_serverid switch is stateful & account-level). If so, login returns
-        # that server's suid (e.g. Torax 933209) and the bot would operate as the
-        # wrong identity on Sigil. Force back to Sigil (ac_serverid=1) and re-read the
-        # Sigil suid, so the bot ALWAYS comes up as its Sigil identity.
-        try:
-            async with self._session.get(
-                f"{BASE_URL}/myaccount.php?ac_serverid=1",
-                allow_redirects=True,
-            ) as resp:
-                switch_content = await resp.text()
-                switch_url = str(resp.url)
-            m = re.search(r"suid=(\d+)", switch_url)
-            resolved = None
-            if m:
-                resolved = int(m.group(1))
-            else:
-                m2 = re.search(r"owchar=(\d+)", switch_content)
-                if m2:
-                    resolved = int(m2.group(1))
-            if resolved and resolved != self.user_id:
-                logger.info("SESSION",
-                            f"Forced Sigil context: suid {self.user_id} → {resolved}")
-                self.user_id = resolved
-        except Exception as e:
-            logger.warning("SESSION", f"Could not force Sigil context after login: {e}")
-
         from datetime import datetime, timezone
         self._last_login = datetime.now(timezone.utc)
 
