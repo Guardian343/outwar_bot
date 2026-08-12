@@ -142,6 +142,51 @@ class OutwarSession:
         logger.info("SESSION", f"Got user_id from redirect: {self.user_id}")
         logger.info("SESSION", "Got session ID from cookie.")
 
+        # FORCE the account to Sigil (server 1). TWO steps are required (Liam):
+        # (1) switch the server via ac_serverid=1, then (2) SELECT an account on that
+        # server — switching alone drifts back to wherever an account was last
+        # selected. Step 2 = fetch the bot's Sigil account link (suid 1157932). The
+        # account's server state persists on Outwar's side, so a fresh login can land
+        # on Torax (933209); without this the bot acts as its Torax identity on the
+        # Sigil host and everything breaks.
+        if self.user_id != 1157932:  # 1157932 = the bot's Sigil suid
+            try:
+                logger.info("SESSION", f"Login landed on suid {self.user_id} — forcing Sigil…")
+                # Step 1: switch server to Sigil
+                async with self._session.get(
+                    f"{BASE_URL}/myaccount.php?ac_serverid=1", allow_redirects=True
+                ) as sresp:
+                    await sresp.text()
+                # Step 2: SELECT the bot's Sigil account (this is what makes it stick)
+                sel_url = (f"{BASE_URL}/world.php?rg_sess_id={self.session_id}"
+                           f"&suid=1157932&serverid=1")
+                async with self._session.get(sel_url, allow_redirects=True) as selresp:
+                    selcontent = await selresp.text()
+                    selurl = str(selresp.url)
+                # Confirm by re-reading the suid
+                new_suid = None
+                m2 = re.search(r"suid=(\d+)", selurl)
+                if m2:
+                    new_suid = int(m2.group(1))
+                else:
+                    m3 = re.search(r"owchar=(\d+)", selcontent)
+                    if m3:
+                        new_suid = int(m3.group(1))
+                if new_suid == 1157932:
+                    logger.info("SESSION", "Forced Sigil + selected account 1157932 ✓")
+                    self.user_id = 1157932
+                elif new_suid:
+                    logger.warning("SESSION", f"After Sigil switch, suid is {new_suid} (expected 1157932)")
+                    self.user_id = new_suid
+                else:
+                    logger.warning("SESSION", "Could not confirm Sigil suid — forcing 1157932")
+                    self.user_id = 1157932
+            except Exception as e:
+                logger.warning("SESSION", f"Forced Sigil switch failed: {e} — assuming 1157932")
+                self.user_id = 1157932
+
+        logger.info("SESSION", f"Final bot suid: {self.user_id}")
+
         from datetime import datetime, timezone
         self._last_login = datetime.now(timezone.utc)
 
