@@ -279,46 +279,51 @@ class GodMonitor(commands.Cog):
     # ------------------------------------------------------------------
 
     async def _post_startup_state(self):
-        """Post currently spawned gods and bosses to alert channels on startup."""
+        """Post currently spawned gods and bosses to alert channels on startup,
+        for every active server (Sigil always; Torax when enabled)."""
         await asyncio.sleep(3)
+        from outwar.servers import host_for
 
-        # --- Gods ---
-        try:
-            god_channel = await self._get_alert_channel("gods")
-            html = await self.session.get("primegods")
-            gods = parse_gods(html)
-            self._gods_cache[1] = gods
+        for server_id in db.get_active_servers():
+            host = host_for(server_id)
 
-            if god_channel:
-                spawned = [g for g in gods if g.spawned]
-                if spawned:
-                    names = "\n".join(f"{es.ICON_STAR} **{g.name}**" if self._is_focus_crew(g.name)
-                                      else f"• **{g.name}**" for g in spawned)
-                    embed = es.spawn_embed(
-                        f"{es.ICON_GOD} Prime Gods Currently Spawned",
-                        description=f"{names}\n\n[View Prime Gods »](http://sigil.outwar.com/primegods)"
-                    )
-                    await god_channel.send(embed=embed)
-        except Exception as e:
-            logger.warning("GOD_MONITOR", f"Startup god state error: {e}")
+            # --- Gods ---
+            try:
+                god_channel = await self._get_alert_channel("gods", server_id)
+                html = await self.session.get_server("primegods", server_id)
+                gods = parse_gods(html)
+                self._gods_cache[server_id] = gods
 
-        # --- Bosses ---
-        try:
-            boss_channel = await self._get_alert_channel("bosses")
-            html = await self.session.get("crew_bossspawns")
-            bosses = parse_bosses(html)
+                if god_channel:
+                    spawned = [g for g in gods if g.spawned]
+                    if spawned:
+                        names = "\n".join(f"{es.ICON_STAR} **{g.name}**" if self._is_focus_crew(g.name)
+                                          else f"• **{g.name}**" for g in spawned)
+                        embed = es.spawn_embed(
+                            f"{es.ICON_GOD} Prime Gods Currently Spawned",
+                            description=f"{names}\n\n[View Prime Gods »]({host}/primegods)"
+                        )
+                        await god_channel.send(embed=embed)
+            except Exception as e:
+                logger.warning("GOD_MONITOR", f"Startup god state error (server {server_id}): {e}")
 
-            if boss_channel:
-                spawned = [b for b in bosses if b.spawned]
-                if spawned:
-                    names = "\n".join(f"• **{b.full_name}**" for b in spawned)
-                    embed = es.spawn_embed(
-                        f"{es.ICON_BOSS} Bosses Currently Spawned",
-                        description=names[:4000]
-                    )
-                    await boss_channel.send(embed=embed)
-        except Exception as e:
-            logger.warning("GOD_MONITOR", f"Startup boss state error: {e}")
+            # --- Bosses ---
+            try:
+                boss_channel = await self._get_alert_channel("bosses", server_id)
+                html = await self.session.get_server("crew_bossspawns", server_id)
+                bosses = parse_bosses(html)
+
+                if boss_channel:
+                    spawned = [b for b in bosses if b.spawned]
+                    if spawned:
+                        names = "\n".join(f"• **{b.full_name}**" for b in spawned)
+                        embed = es.spawn_embed(
+                            f"{es.ICON_BOSS} Bosses Currently Spawned",
+                            description=names[:4000]
+                        )
+                        await boss_channel.send(embed=embed)
+            except Exception as e:
+                logger.warning("GOD_MONITOR", f"Startup boss state error (server {server_id}): {e}")
 
     # ------------------------------------------------------------------
     # Poll logic
