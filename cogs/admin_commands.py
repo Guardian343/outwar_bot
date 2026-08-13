@@ -186,75 +186,59 @@ class AdminCommands(commands.Cog):
     # !scan-trustees
     # ------------------------------------------------------------------
 
-    @commands.command(name="scan-trustees")
-    async def scan_trustees(self, ctx):
-        """
-        Scrape the bot account's trustee list from /myaccount and update
-        trustees.json for THIS server (resolved from the channel, default Sigil).
-        Only this server's trustees are replaced — the other server's are kept.
-        Also fetches each character's crew, level and rage.
-        """
-        from outwar.servers import server_from_channel, name_for, host_for
-        server_id = server_from_channel(ctx.channel)
+    async def _scan_one_server(self, ctx, server_id: int):
+        """Scan + enrich + save trustees for ONE server. Returns the enriched count
+        (or None if nothing found). Enrichment is server-aware: Sigil uses the proven
+        cookie path; non-Sigil uses the cookieless per-request path (sess_get)."""
+        from outwar.servers import name_for, host_for as _host_for
         server_name = name_for(server_id)
         await ctx.send(f"🔍 Scanning **{server_name}** trustee list from Outwar...")
 
-        # Read the server-specific trustee list via the SAFE per-request method
-        # (serverid= + per-server suid), NOT ac_serverid. ac_serverid is the
-        # ACCOUNT-LEVEL switch — it flips the bot's server on Outwar's side and
-        # leaves it stuck there (broke Sigil on 2026-08-12). serverid= just selects
-        # which server the READ is for, without moving the account. (Confirmed by
-        # Freak: "there's no ac_ for regular URLs, it's just serverid= + suid".)
+        # Trustee list via the safe per-request method (serverid= + per-server suid),
+        # NOT ac_serverid (which flips the account server-side). Proven for both
+        # servers (Sigil ~751, Torax ~535).
         html = await self.session.get_server("myaccount", server_id)
         raw_trustees = parse_trustee_list(html)
-
-        # Sanity signal: if a Torax scan returns the exact Sigil count, the switch
-        # likely didn't take (session not carrying the switch). Warn but continue —
-        # the count in the next message lets Liam verify (Sigil ~751, Torax ~500-550).
-        sigil_count = len(db.get_trustees(server_id=1))
-        if server_id != 1 and len(raw_trustees) == sigil_count and sigil_count > 0:
-            await ctx.send(
-                f"⚠️ **Warning:** the {server_name} scan returned **{len(raw_trustees)}** "
-                f"trustees — the SAME as Sigil ({sigil_count}). The server switch may "
-                f"not have taken effect in the bot's session. Check the count below "
-                f"carefully before trusting it (expected ~500-550 for Torax). If it's "
-                f"wrong, DON'T worry — this scan only replaces {server_name} data."
-            )
 
         if not raw_trustees:
             await ctx.send(
                 f"⚠️ No trustees found on the **{server_name}** myaccount page. "
-                "Make sure characters are trusteed to the bot account on that server, "
-                "then try again."
+                "Make sure characters are trusteed to the bot account on that server."
             )
-            return
+            return None
 
         await ctx.send(
             f"Found **{len(raw_trustees)}** {server_name} trustees. "
             f"Fetching crew/level info... (this may take a moment)"
         )
 
-        # Fetch each character's profile for crew + level + rage. NOTE: enrichment
-        # still uses the cookie-session ow_userid approach, which is correct for
-        # SIGIL scans. Torax enrichment needs the per-server (serverid=+suid) method —
-        # refine when the Torax read path is proven end-to-end (deliberate Torax build).
-        semaphore = asyncio.Semaphore(10)  # limit concurrent requests
-        from outwar.servers import host_for as _host_for
-        _host = _host_for(1)
+        semaphore = asyncio.Semaphore(10)
+        _host = _host_for(server_id)
+        is_sigil = (int(server_id) == 1)
+        ssid = getattr(self.session, "session_id", None)
 
         async def _enrich(trustee: dict) -> dict:
             async with semaphore:
                 try:
-                    from yarl import URL as _URL
-                    HOST_URL = _URL(_host)
-                    self.session._session.cookie_jar.update_cookies(
-                        {"ow_userid": str(trustee["suid"])}, response_url=HOST_URL
-                    )
-                    profile_html = await self.session.get("profile")
+                    if is_sigil:
+                        # Sigil: proven cookie-session ow_userid path.
+                        from yarl import URL as _URL
+                        HOST_URL = _URL(_host)
+                        self.session._session.cookie_jar.update_cookies(
+                            {"ow_userid": str(trustee["suid"])}, response_url=HOST_URL
+                        )
+                        profile_html = await self.session.get("profile")
+                        self.session._session.cookie_jar.update_cookies(
+                            {"ow_userid": str(self.session.user_id)}, response_url=HOST_URL
+                        )
+                    else:
+                        # Torax / non-Sigil: cookieless per-request path with the
+                        # trustee's own suid on that server (proven 2026-08-13).
+                        from outwar import ssid_store
+                        profile_html = await ssid_store.sess_get(
+                            "profile", ssid, int(trustee["suid"]), server_id
+                        )
                     crew, level, rage, crew_id = parse_character_crew_and_level(profile_html)
-                    self.session._session.cookie_jar.update_cookies(
-                        {"ow_userid": str(self.session.user_id)}, response_url=HOST_URL
-                    )
                     trustee["crew"] = crew
                     trustee["rage"] = rage
                     if crew_id is not None:
@@ -262,19 +246,17 @@ class AdminCommands(commands.Cog):
                     if level > 0:
                         trustee["level"] = level
                 except Exception as e:
-                    logger.warning("ADMIN", f"Error enriching {trustee['name']}: {e}")
+                    logger.warning("ADMIN", f"Error enriching {trustee['name']} "
+                                            f"(server {server_id}): {e}")
             return trustee
 
         enriched = await asyncio.gather(*[_enrich(t) for t in raw_trustees])
         enriched = [t for t in enriched if t]
 
-        # (No server switch-back needed — we never switched the account. The scan
-        # reads via serverid= which doesn't move the account off Sigil.)
-
-        # Save ONLY this server's trustees — preserves the other server's list.
+        # Save ONLY this server's trustees — preserves other servers' lists.
         db.save_trustees_for_server(server_id, enriched)
 
-        # Summary embed
+        # Per-server summary embed
         crews: dict[str, int] = {}
         for t in enriched:
             crew = t.get("crew") or "Unknown"
@@ -285,14 +267,12 @@ class AdminCommands(commands.Cog):
             description=f"**{len(enriched)}** {server_name} trustees saved "
                         f"(other servers' trustees preserved)."
         )
-
         crew_lines = "\n".join(
             f"{name}: **{count}**"
             for name, count in sorted(crews.items(), key=lambda x: -x[1])
         )
         if crew_lines:
             embed.add_field(name="Characters per Crew", value=crew_lines[:1024], inline=False)
-
         no_crew = [t["name"] for t in enriched if not t.get("crew")]
         if no_crew:
             embed.add_field(
@@ -300,8 +280,58 @@ class AdminCommands(commands.Cog):
                 value=" ".join(no_crew)[:1024],
                 inline=False
             )
-
         await ctx.send(embed=embed)
+        return len(enriched)
+
+    @commands.command(name="scan-trustees")
+    async def scan_trustees(self, ctx, server: str = None):
+        """
+        Scrape the bot account's trustee list and update trustees.json per server.
+        Each server's trustees are enriched with crew/level/rage and saved separately.
+
+          !scan-trustees          → scan ALL active servers (Sigil + Torax)
+          !scan-trustees sigil    → scan just Sigil
+          !scan-trustees torax    → scan just Torax
+        (With no arg in a server-specific channel, still scans all active servers.)
+        """
+        from outwar.servers import name_for
+
+        # Resolve which servers to scan.
+        if server:
+            key = server.strip().lower()
+            if key in ("sigil", "1"):
+                targets = [1]
+            elif key in ("torax", "2"):
+                targets = [2]
+            elif key in ("all", "both"):
+                targets = db.get_active_servers()
+            else:
+                await ctx.send("Usage: `!scan-trustees [sigil|torax|all]`")
+                return
+        else:
+            # No arg → scan all active servers.
+            targets = db.get_active_servers()
+
+        if len(targets) > 1:
+            names = ", ".join(name_for(s) for s in targets)
+            await ctx.send(f"🔄 Scanning trustees for **{len(targets)}** servers: {names}")
+
+        results = {}
+        for sid in targets:
+            count = await self._scan_one_server(ctx, sid)
+            if count is not None:
+                results[sid] = count
+
+        # Combined summary when more than one server scanned.
+        if len(targets) > 1 and results:
+            total = sum(results.values())
+            lines = "\n".join(f"• {name_for(s)}: **{c}** trustees" for s, c in results.items())
+            embed = es.report_embed(
+                f"{es.ICON_REPORT} All Servers Scanned",
+                description=f"Total **{total}** trustees saved across "
+                            f"{len(results)} server(s):\n{lines}"
+            )
+            await ctx.send(embed=embed)
 
     # ------------------------------------------------------------------
     # !remove-trustees  /  !clear-trustees   (destructive — need confirm)
