@@ -387,7 +387,24 @@ class OutwarSession:
                 if self.on_relogin:
                     await self.on_relogin(success=False, error=str(e))
                 return False
-            
+
+    def is_healthy(self) -> bool:
+        """Cheap, synchronous check of whether the session looks usable RIGHT NOW.
+        Fan-out background loops (Primewatcher pot cast, boss-raid pot recast) call
+        this before iterating over many accounts, so a network blip / tripped
+        circuit breaker makes them SKIP the cycle instead of firing a doomed
+        request per account (which is what turned a brief blip into a flood).
+
+        Unhealthy when: not logged in, OR the re-login circuit breaker is currently
+        tripped (which only happens after repeated re-login trouble — i.e. a real
+        network problem, not a one-off)."""
+        if not self._session or not self.user_id:
+            return False
+        from datetime import datetime, timezone
+        if self._relogin_breaker_until and datetime.now(timezone.utc) < self._relogin_breaker_until:
+            return False
+        return True
+
     # ── Internal retry helper ────────────────────────────────────────────────
     async def request_result(
         self,

@@ -700,6 +700,16 @@ class PrimeWatcher(commands.Cog):
         if not has_skills and not has_pots:
             return
 
+        # Early-bail: if the session is mid-network-trouble (circuit breaker tripped
+        # or not logged in), don't fan out a per-account backpack/cast request across
+        # the whole group — that's what turned a brief blip into a flood. Skip the
+        # prep this cycle; the raid attempt itself will still try, and next cycle
+        # recovers. (Pots/skills last well beyond one cycle, so skipping one is fine.)
+        if hasattr(self.session, "is_healthy") and not self.session.is_healthy():
+            logger.warning("PW", f"{group_name}: session unhealthy — skipping skills/pots "
+                                 f"prep this cycle (network issue; will retry next cycle)")
+            return
+
         what = " + ".join(([("skills")] if has_skills else []) + (["pots"] if has_pots else []))
         status = None
         try:

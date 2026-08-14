@@ -652,6 +652,14 @@ class BossRaidCommands(commands.Cog):
             if not _md_has_30min_left():
                 logger.info("BOSS_RAID", "[POTS] Under 30 min of MD left — stopping pot recasts")
                 break
+            # Early-bail: if the session is mid-network-trouble, skip THIS recast
+            # cycle rather than fan out a doomed backpack fetch per account (the
+            # flood amplifier). Pots last longer than 5 min, so skipping one recast
+            # is harmless; we recover on the next 5-min tick.
+            if hasattr(self.session, "is_healthy") and not self.session.is_healthy():
+                logger.warning("BOSS_RAID", "[POTS] Session unhealthy — skipping this "
+                                            "recast cycle (network issue; retry in 5 min)")
+                continue
             result = await self._cast_boss_pots(trustees, boss_name, notify, pot_expiry_ref, silent=True)
             pot_expiry_ref.update(result)
 
