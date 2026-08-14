@@ -32,6 +32,28 @@ summary) and to action commands (guard-start) — see Critical below.
 
 ## 🔴 Critical / Next Up (dual-server rollout — do these next, one at a time)
 
+- [ ] 🧭 Phase 4 — CHANNEL→SERVER resolution (the proper fix for the name-collision bug class)  [Hard]
+  Liam's insight: commands run in per-server channels (sigil-* / torax-*), so the CHANNEL
+  already tells you the server. Instead of resolvers defaulting to Sigil, derive the server
+  from the invoking channel via the existing helper `server_from_channel(ctx.channel)` (in
+  outwar/servers.py — keys off the channel-name prefix, falls back to Sigil). Thread that
+  server_id through every account/name resolver. This makes per-server scoping AUTOMATIC and
+  retires the whole "unfiltered get_trustees()" bug class by construction — a command operates
+  on the server of the channel it was run in, never merging both. Caveat: commands in
+  non-prefixed channels / DMs fall back to Sigil (fine if server-specific commands live in the
+  server-prefixed channels). Do the 🔴 resolver bucket below this way.
+  🔴 resolver bucket (account/name resolvers that still call get_trustees() unfiltered — same
+  bug class as the pcaps collision): backpack_commands L86 _resolve_account,
+  character_commands L585 _resolve_target, misc_commands L563 _resolve_trustees,
+  raid_commands L2560 slayer_needs, admin_commands L471 autorank, L880/L1016
+  optimise_all/optimum, L1227 scores. (Immediate server_id-filter fix already covers
+  resolve_group → pcaps/rage/potions; these are the remaining ones.)
+  🟡 judgment calls (maybe want cross-server, decide per-command): utility who (find a name on
+  either server?), utility deathbot_status (totals?), god_monitor L1177 envoy-drop name-match
+  (recognise both servers' winners?), admin remove_trustees/clear_trustees (⚠️ MODIFY the
+  store — scope carefully). 🟢 leave as-is: __init__ caches, the scan itself (wants all),
+  crawler (single char), debug commands.
+
 - [ ] ⚔️ Make `!guard-start` dual-server — but TEST THE TORAX CAST PATH FIRST  [Hard]
   Currently Sigil-only: it calls `db.get_trustees()` (server 1 default) and casts via
   `post_as` on a hardcoded SIGIL_URL. So it guards 751 Sigil trustees, ignores the 535 Torax.
@@ -245,6 +267,21 @@ manage at runtime via command, mark the constant "SEED ONLY".
 ## ✅ Completed
 
 ### Session 2026-08-13 (dual-server LIVE)
+- [x] Dual-server NAME-COLLISION bug fixed (resolve_group) — after scanning BOTH servers'
+      trustees into one store, names existing on Sigil AND Torax got two entries; resolve_group
+      called get_trustees() unfiltered → a 10-name group resolved to 17 accounts (the cross-server
+      duplicates), and the Torax dupes (empty enrichment → dash rage) caused false "low rage — raid
+      not formed" AND likely the potion-fan-out flood. Fix: resolve_group + boss_raid _resolve_group
+      now pass server_id to get_trustees()/get_trustees_by_crew() (default Sigil). Diagnosed by Liam
+      via !pcaps lod1 (17, 6 dash-rage) vs !groups lod1 (correct 10). Proper end-state = Phase 4
+      channel→server resolution (see Critical). NOTE: crewless ≠ no rage — rage accrues each turn
+      regardless of crew; the dash is failed Torax enrichment, not crewlessness.
+- [x] Session resilience piece 1 — re-login throttle + circuit breaker (session.py): max 1 re-login
+      / 60s; >5 in 10 min trips the breaker (pauses re-login 5 min, treats as network problem not
+      logout). Confirmed live: one re-login instead of dozens. ⚠️ Piece 2 (early-bail via is_healthy)
+      built but INEFFECTIVE — throttle stops re-logins → breaker never trips → is_healthy never sees
+      unhealthy → bail never fires. is_healthy() must detect logged-out DIRECTLY (next session).
+
 - [x] Torax auth saga SOLVED — forced-Sigil-on-login (switch server + SELECT account, both
       steps); all `ac_serverid` removed from live code paths; per-server suids (Sigil 1157932 /
       Torax 933209). Bot self-corrects to Sigil every login -> can't get stuck on Torax. 33h stable.
