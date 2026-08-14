@@ -32,6 +32,45 @@ summary) and to action commands (guard-start) — see Critical below.
 
 ## 🔴 Critical / Next Up (dual-server rollout — do these next, one at a time)
 
+- [ ] 🩺 SELF-HEAL / WATCHDOG suite (holiday-critical — bot must survive ~2 weeks unattended)  [Hard]
+  Model A: supervisor self-heals, external watchdog only alerts. Layers:
+    L0 bot self-heals (throttle+early-bail+is_healthy — DONE) · L1 crash-monitor (EXISTS:
+    process_manager.monitor_forever — restarts on process DEATH) · L2 health-monitor (NEW —
+    catches ALIVE-but-WEDGED, the gap L1 misses, which is what bit us twice) · L3 give-up alert.
+  Heartbeat: bot writes heartbeat(UTC)+healthy(is_healthy()) to status.json each cycle
+    (bot already writes status.json); supervisor reads every ~60s. Two wedged conditions →
+    15-min SUSTAINED clock (resets the instant bot reports healthy / heartbeat updates, so L0
+    self-heal wins first): (a) stale heartbeat >15min, (b) healthy==False for 15min. Guard
+    (CONSERVATIVE): max 3 restarts/30min then GIVE UP + loud alert. Grace ~3-5min after a
+    restart before re-checking.
+  Alerting tiers: 🟢 Discord log (routine restart) · 🟡 Discord+soft ntfy (2nd/3rd restart) ·
+    🔴 loud ntfy+Discord (gave up / bot down / supervisor unreachable). ntfy = free push (bot/
+    supervisor sends HTTP POST to an obscure topic; subscribe in the ntfy app). Discord = durable
+    log you scroll back through. Self-heal is PRIMARY (Liam may be phoneless 12h on holiday); the
+    alert is just so he's informed, not so he has to act.
+  STAGED build (this auto-restarts the bot unattended — trust before arm):
+    Stage 1: bot heartbeat in status.json (harmless — nothing reads it yet) ← NEXT
+    Stage 2: supervisor health-monitor DETECT-ONLY (logs "would have restarted") 1-2 days
+    Stage 3: ARM restart + 3-in-30 guard + grace
+    Stage 4: alerting tiers + configure the EXISTING watchdog
+  NB: supervisor repo (github.com/Guardian343/deathbot_supervisor) ALREADY has watchdog.py — an
+    independent ntfy+Discord alerter with grace-fails + alert-once-on-down/recovery. But it ONLY
+    ALERTS (no restart), has a CHANGEME ntfy topic + Windows/pi placeholder paths (yours = liam@
+    /home/liam). Needs: real topic + Discord webhook, path fix, deploy. The RESTART logic goes in
+    the SUPERVISOR (Model A), NOT the watchdog. process_manager already has start/stop/restart.
+  Open Qs at build: does the bot's most frequent cycle tick often enough to beat a 15-min
+    heartbeat? where is is_healthy() reachable from the status-writing code?
+
+- [ ] 🔀 Boss death/respawn FLIP-FLOP — dual-server state bleed  [Medium] (fixed by 3c)
+  Symptom (2026-08-13): Discord showed Maekrix "defeated!" then "spawned!" when it did NOT die
+  on Sigil. Root cause (Liam's diagnosis): Maekrix was ALIVE on Sigil but DEAD on Torax; the
+  boss monitor checks both servers but tracks boss state in a SHARED (not per-server) place, so
+  it read Torax's dead-state → "defeated", then Sigil's alive-state next cycle → "spawned". Same
+  bug CLASS as the name collision — dual-server data not scoped per-server. Also confused the
+  raid into a "first-cycle produced nothing — retrying" loop (which DID self-recover). FIX: part
+  of 3c — make boss poll + state PER-SERVER so Sigil's and Torax's same-named boss never
+  flip-flop. WORKAROUND until then: run Sigil-only (!active-servers sigil) — sidesteps it entirely.
+
 - [ ] 🧭 Phase 4 — CHANNEL→SERVER resolution (the proper fix for the name-collision bug class)  [Hard]
   Liam's insight: commands run in per-server channels (sigil-* / torax-*), so the CHANNEL
   already tells you the server. Instead of resolvers defaulting to Sigil, derive the server
@@ -130,6 +169,10 @@ summary) and to action commands (guard-start) — see Critical below.
   once against the full server-aware data model rather than twice. This is the natural capstone
   of the dual-server work. (Small-patch exceptions possible before then, e.g. primewatcher
   display + settings clutter.)
+  BUG to fix in the redesign: "Copy Visible" on the Logs tab works on MOBILE but silently fails
+  to copy to clipboard on DESKTOP browser (PC) — nothing lands to paste. Likely a clipboard-API
+  secure-context/permissions issue or a mobile-vs-desktop code path difference. Low priority but
+  captured.
 - [ ] Pi-hole network ad-blocker  [Easy] — PARKED (Liam's aside). Revisit once dual-server
   is at full potential + dashboard updated. Runs fine alongside the bot; watch for a port 80
   clash with the supervisor dashboard, give the Pi a static IP, set a secondary DNS
@@ -267,6 +310,22 @@ manage at runtime via command, mark the constant "SEED ONLY".
 ## ✅ Completed
 
 ### Session 2026-08-13 (dual-server LIVE)
+- [x] Session resilience is_healthy() FIX — detects logged-out DIRECTLY via a _known_logged_out
+      flag (set on any genuine logged-out page, cleared on successful login / authenticated
+      response), NOT via the circuit breaker. Fixes the flaw where the throttle stopped the breaker
+      tripping → is_healthy never saw unhealthy → the early-bail never fired. Now the pot-loop
+      early-bails fire on the FIRST logged-out sign. (outwar/session.py — packaged, DEPLOY PENDING.)
+- [x] Live 197-account boss raid CLEAN post-name-collision-fix: formed/joined/launched, pots on
+      192 accounts NO flood, first raid 98.4M dmg 197/197. Confirms the name-collision fix resolved
+      pcaps=17, false-low-rage AND the pot flood (one root cause, three symptoms). PW raiding again.
+- [x] Self-heal / watchdog suite DESIGNED (on paper, agreed) — see Critical. Model A, 15-min
+      sustained clock, 3-restarts/30min guard, staged detect-only-first rollout. Supervisor repo
+      already has a watchdog.py alerter to build on.
+- [x] Resilience proven in the wild: a session blip during a boss raid (21:31) triggered ONE
+      re-login + immediate recovery (throttle working — not the old hour-long flood); and the
+      boss-flip-flop raid confusion SELF-RECOVERED via the retry loop. Bot rode out a messy moment
+      unattended and came back on its own.
+
 - [x] Dual-server NAME-COLLISION bug fixed (resolve_group) — after scanning BOTH servers'
       trustees into one store, names existing on Sigil AND Torax got two entries; resolve_group
       called get_trustees() unfiltered → a 10-name group resolved to 17 accounts (the cross-server

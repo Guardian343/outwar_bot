@@ -242,3 +242,34 @@ Pattern for each: replace the hardcoded host with `host_for(server_id)` where
 - Decide: auto-discover channels by name prefix, or configure IDs explicitly?
   (Auto-discover by prefix is less config and matches the channel-as-context
   model — recommended.)
+
+---
+
+## Dual-server STATE-BLEED bug class (found 2026-08-13) — scope state per-server
+
+Two bugs, same root pattern: scanning/checking BOTH servers but tracking state in a
+SHARED place instead of per-server. Both surfaced once Torax went live.
+
+1. NAME COLLISION (resolvers) — RESOLVED. A character name existing on Sigil AND Torax
+   had two trustee entries; resolve_group() called get_trustees() unfiltered → a 10-name
+   group resolved to 17 accounts (cross-server duplicates). Torax dupes had empty
+   enrichment (dash rage — from FAILED Torax profile enrichment, NOT crewlessness; rage
+   accrues every turn regardless of crew) → rage check saw them below threshold → false
+   "low rage — raid not formed". The bloated list also fed the potion fan-out → flood.
+   ONE root cause, THREE symptoms (pcaps=17, false-low-rage, pot flood).
+   FIX: resolve_group + boss_raid._resolve_group pass server_id to get_trustees()/
+   get_trustees_by_crew() (default Sigil). Confirmed !pcaps lod1 → 10.
+
+2. BOSS DEATH/RESPAWN FLIP-FLOP — pending (fixed by 3c). Maekrix alive on Sigil, dead on
+   Torax. The boss monitor checks both servers but tracks boss state SHARED, not per-server
+   → read Torax's dead-state → "defeated!", then Sigil's alive-state next cycle →
+   "spawned!". False death/respawn confused the raid into a "first-cycle produced nothing —
+   retrying" loop (which self-recovered). FIX: 3c makes boss poll + state PER-SERVER.
+   WORKAROUND: run Sigil-only (!active-servers sigil).
+
+THE PROPER SYSTEMIC FIX = Phase 4: derive server_id from the invoking CHANNEL
+(server_from_channel, keys off sigil-*/torax-* prefix) and keep ALL per-server monitor
+state keyed by server_id. This retires the whole state-bleed class by construction.
+
+KEY LESSON: crewless != no rage. Rage accrues each turn regardless of crew membership.
+Dash-rage on Torax dupes = failed enrichment, not crewlessness.
