@@ -2284,7 +2284,10 @@ class BossRaidCommands(commands.Cog):
         await ctx.send(embed=embed)
 
     def _resolve_group(self, group: str, server_id: int = 1) -> list:
-        all_trustees = db.get_trustees()
+        # Filter to this server's trustees so a group's names don't also match the
+        # same-named account on the OTHER server (dual-server name collision:
+        # scanning both servers means a name can exist on Sigil AND Torax).
+        all_trustees = db.get_trustees(server_id=server_id)
         excluded = {n.lower() for n in db.get_excluded(server_id)}
         def _keep(lst):
             return [t for t in lst if t["name"].lower() not in excluded]
@@ -2294,7 +2297,7 @@ class BossRaidCommands(commands.Cog):
             return _keep([t for t in all_trustees if t["name"] in names])
         crew = db.get_crew(group)
         crew_full = crew["full_name"] if crew else db.normalize_crew(group)
-        by_crew = db.get_trustees_by_crew(crew_full)
+        by_crew = db.get_trustees_by_crew(crew_full, server_id=server_id)
         if by_crew:
             return _keep(by_crew)
         return _keep([t for t in all_trustees if t["name"].lower() == group.lower()])

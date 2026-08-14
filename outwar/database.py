@@ -924,7 +924,7 @@ def resolve_group(group: str, server_id: int = 1, apply_exclusions: bool = False
     get the FULL roster. RAID paths pass apply_exclusions=True so excluded accounts
     aren't raided. Exclusion is per-server (server_id).
     """
-    all_trustees = get_trustees()
+    all_trustees = get_trustees(server_id=server_id)
     rga_group = get_group(group)
     if rga_group:
         names = set(group_to_list(rga_group))
@@ -932,7 +932,7 @@ def resolve_group(group: str, server_id: int = 1, apply_exclusions: bool = False
     else:
         crew = get_crew(group)
         crew_full = crew["full_name"] if crew else normalize_crew(group)
-        by_crew = get_trustees_by_crew(crew_full)
+        by_crew = get_trustees_by_crew(crew_full, server_id=server_id)
         if by_crew:
             result = by_crew
         else:
