@@ -95,6 +95,12 @@ class OutwarSession:
         self._relogin_max_in_window = 5      # >this many in the window → trip the breaker
         self._relogin_breaker_until = None   # datetime; while set + future, re-login is paused
         self._relogin_breaker_backoff_secs = 300  # how long to pause when the breaker trips
+        # Direct logged-out signal: set True the moment a genuine logged-out page is
+        # seen, cleared on a successful (re)login. is_healthy() reads this so it can
+        # report unhealthy on the FIRST sign of trouble — WITHOUT waiting for the
+        # circuit breaker to trip (the throttle prevents repeated re-logins, so the
+        # breaker often never trips; relying on it alone left is_healthy blind).
+        self._known_logged_out = False
 
     async def login(self, username: str, password: str):
         self._username = username
@@ -196,6 +202,7 @@ class OutwarSession:
                 self.user_id = 1157932
 
         logger.info("SESSION", f"Final bot suid: {self.user_id}")
+        self._known_logged_out = False  # fresh login → session healthy
 
         from datetime import datetime, timezone
         self._last_login = datetime.now(timezone.utc)
@@ -329,6 +336,11 @@ class OutwarSession:
         if not self._is_logged_out(html):
             return False
 
+        # A genuine logged-out page was seen — mark the session unhealthy IMMEDIATELY
+        # so is_healthy() reports it on the first sign, even if the throttle/breaker
+        # decide not to actually re-login this instant.
+        self._known_logged_out = True
+
         from datetime import datetime, timezone, timedelta
         now = datetime.now(timezone.utc)
 
@@ -375,6 +387,7 @@ class OutwarSession:
                 logger.warning("SESSION", "Session expired — re-logging in...")
                 await self._do_login()
                 logger.info("SESSION", "Re-login successful.")
+                self._known_logged_out = False  # recovered — session healthy again
                 self._relogin_times.append(datetime.now(timezone.utc))
                 if self.on_relogin:
                     await self.on_relogin(success=True)
@@ -391,14 +404,20 @@ class OutwarSession:
     def is_healthy(self) -> bool:
         """Cheap, synchronous check of whether the session looks usable RIGHT NOW.
         Fan-out background loops (Primewatcher pot cast, boss-raid pot recast) call
-        this before iterating over many accounts, so a network blip / tripped
-        circuit breaker makes them SKIP the cycle instead of firing a doomed
-        request per account (which is what turned a brief blip into a flood).
+        this before iterating over many accounts, so a network blip / logged-out
+        session makes them SKIP the cycle instead of firing a doomed request per
+        account (which is what turned a brief blip into a flood).
 
-        Unhealthy when: not logged in, OR the re-login circuit breaker is currently
-        tripped (which only happens after repeated re-login trouble — i.e. a real
-        network problem, not a one-off)."""
+        Unhealthy when ANY of:
+          - not logged in (no session / no user_id), OR
+          - a genuine logged-out page was seen and we haven't re-logged in since
+            (`_known_logged_out`) — this is the DIRECT signal, so we bail on the
+            FIRST sign of trouble without waiting for the circuit breaker, OR
+          - the re-login circuit breaker is currently tripped (sustained trouble).
+        """
         if not self._session or not self.user_id:
+            return False
+        if self._known_logged_out:
             return False
         from datetime import datetime, timezone
         if self._relogin_breaker_until and datetime.now(timezone.utc) < self._relogin_breaker_until:
@@ -494,6 +513,12 @@ class OutwarSession:
                         html=html,
                         attempts=attempt + 1,
                     )
+
+                # Got an authenticated (not logged-out) response — the session is
+                # working, so clear any stale logged-out flag. This lets is_healthy()
+                # recover on its own if a logged-out reading was transient.
+                if self._known_logged_out:
+                    self._known_logged_out = False
 
                 if self._is_ajax_or_partial_success(html, path):
                     return RequestResult(
