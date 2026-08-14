@@ -85,6 +85,16 @@ class OutwarSession:
         self._relogin_lock = asyncio.Lock()
         self.on_relogin = None
         self._last_login = None
+        # --- Re-login throttle + circuit breaker (prevents the thrash cascade
+        #     where a brief network blip triggers dozens of re-logins that then
+        #     kick each other's sessions and sustain the flood) ---
+        self._last_relogin_attempt = None   # datetime of the most recent re-login attempt
+        self._relogin_cooldown_secs = 60     # min seconds between re-login attempts
+        self._relogin_times = []             # timestamps of recent successful-path re-logins
+        self._relogin_window_secs = 600      # 10-min window for the circuit breaker
+        self._relogin_max_in_window = 5      # >this many in the window → trip the breaker
+        self._relogin_breaker_until = None   # datetime; while set + future, re-login is paused
+        self._relogin_breaker_backoff_secs = 300  # how long to pause when the breaker trips
 
     async def login(self, username: str, password: str):
         self._username = username
@@ -302,27 +312,80 @@ class OutwarSession:
         return any(marker in lower for marker in logged_out_markers)
 
     async def _relogin_if_needed(self, html: str) -> bool:
-        """Re-login if session has expired. Returns True if re-login happened."""
+        """Re-login if the session has genuinely expired. Returns True if a
+        re-login actually happened.
+
+        THROTTLED + CIRCUIT-BROKEN so a transient network blip can't cause a
+        re-login cascade:
+          - At most one re-login attempt per `_relogin_cooldown_secs` (default 60s).
+            If many requests see a logged-out page at once, only the first
+            re-logs in; the rest are told "no" and simply retry/back off.
+          - If re-logins pile up (> `_relogin_max_in_window` within
+            `_relogin_window_secs`), the breaker trips and pauses ALL re-login
+            attempts for `_relogin_breaker_backoff_secs`, logging loudly + alerting
+            once, rather than hammering Outwar (which is what caused the hour-long
+            flood from a few seconds of network trouble).
+        """
         if not self._is_logged_out(html):
             return False
 
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+
         async with self._relogin_lock:
+            # 1) Circuit breaker: if tripped and still within the back-off, refuse.
+            if self._relogin_breaker_until and now < self._relogin_breaker_until:
+                return False
+
+            # 2) Throttle: refuse if we attempted a re-login very recently.
+            if (self._last_relogin_attempt is not None
+                    and (now - self._last_relogin_attempt).total_seconds()
+                        < self._relogin_cooldown_secs):
+                return False
+
+            # 3) Circuit-breaker accounting: prune old timestamps, then check count.
+            cutoff = now - timedelta(seconds=self._relogin_window_secs)
+            self._relogin_times = [t for t in self._relogin_times if t > cutoff]
+            if len(self._relogin_times) >= self._relogin_max_in_window:
+                self._relogin_breaker_until = now + timedelta(
+                    seconds=self._relogin_breaker_backoff_secs)
+                logger.error(
+                    "SESSION",
+                    f"Re-login circuit breaker TRIPPED: "
+                    f"{len(self._relogin_times)} re-logins in "
+                    f"{self._relogin_window_secs // 60} min. Pausing re-login for "
+                    f"{self._relogin_breaker_backoff_secs // 60} min — this usually "
+                    f"means a network problem, NOT a real logout. Keeping the "
+                    f"existing session and backing off."
+                )
+                if self.on_relogin:
+                    try:
+                        await self.on_relogin(
+                            success=False,
+                            error=(f"circuit breaker tripped — too many re-logins; "
+                                   f"paused {self._relogin_breaker_backoff_secs // 60} min "
+                                   f"(likely a network issue)"))
+                    except Exception:
+                        pass
+                return False
+
+            # Passed all guards — record the attempt and try the re-login.
+            self._last_relogin_attempt = now
             try:
                 logger.warning("SESSION", "Session expired — re-logging in...")
                 await self._do_login()
                 logger.info("SESSION", "Re-login successful.")
-
+                self._relogin_times.append(datetime.now(timezone.utc))
                 if self.on_relogin:
                     await self.on_relogin(success=True)
-
                 return True
-
             except Exception as e:
                 logger.error("SESSION", f"Re-login failed: {e}")
-
+                # Count failed attempts toward the breaker too — repeated failures
+                # (e.g. site unreachable) should trip it and stop the hammering.
+                self._relogin_times.append(datetime.now(timezone.utc))
                 if self.on_relogin:
                     await self.on_relogin(success=False, error=str(e))
-
                 return False
             
     # ── Internal retry helper ────────────────────────────────────────────────
