@@ -705,7 +705,10 @@ class PrimeWatcher(commands.Cog):
         # the whole group — that's what turned a brief blip into a flood. Skip the
         # prep this cycle; the raid attempt itself will still try, and next cycle
         # recovers. (Pots/skills last well beyond one cycle, so skipping one is fine.)
-        if hasattr(self.session, "is_healthy") and not self.session.is_healthy():
+        # PrimeWatcher doesn't hold its own session — it borrows the raid cog's.
+        _raid_cog = self.bot.get_cog("BossRaidCommands")
+        _sess = getattr(_raid_cog, "session", None)
+        if _sess is not None and hasattr(_sess, "is_healthy") and not _sess.is_healthy():
             logger.warning("PW", f"{group_name}: session unhealthy — skipping skills/pots "
                                  f"prep this cycle (network issue; will retry next cycle)")
             return
