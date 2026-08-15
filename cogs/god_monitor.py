@@ -180,6 +180,21 @@ class GodMonitor(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def boss_poll_loop(self):
+        # Heartbeat FIRST — write a liveness beat every minute before doing any
+        # work, so the supervisor's health-monitor can tell "loop still ticking"
+        # from "wedged", independent of whether the poll itself succeeds. Wrapped
+        # so it can never affect the poll. (Stage 1 of the self-heal suite —
+        # nothing reads this yet; it's the harmless foundation.)
+        try:
+            healthy = None
+            try:
+                if hasattr(self.session, "is_healthy"):
+                    healthy = self.session.is_healthy()
+            except Exception:
+                healthy = None
+            status_writer.publish_heartbeat(healthy=healthy)
+        except Exception:
+            pass
         await self._poll_bosses()
 
     @boss_poll_loop.before_loop

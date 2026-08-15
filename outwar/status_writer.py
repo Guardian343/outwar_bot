@@ -89,6 +89,29 @@ def _update(section: str, payload):
 # Public API — call these from the bot with the objects it already has.
 # ---------------------------------------------------------------------------
 
+def publish_heartbeat(healthy=None, extra=None):
+    """Publish a liveness heartbeat: a UTC timestamp proving the bot's main loop
+    is still ticking, plus an optional health flag.
+
+    The supervisor's health-monitor reads this to distinguish a bot that's ALIVE
+    AND WORKING from one that's alive-but-wedged (process up, but the loop has
+    stopped cycling — which a plain crash-monitor can't see). Called every ~60s
+    from the boss poll loop.
+
+      healthy: the session's is_healthy() result if known (True/False), else None.
+      extra:   optional dict of extra diagnostic fields (merged in).
+    """
+    try:
+        payload = {"beat_at": _now_iso()}
+        if healthy is not None:
+            payload["healthy"] = bool(healthy)
+        if isinstance(extra, dict):
+            payload.update(extra)
+        _update("heartbeat", payload)
+    except Exception:
+        pass
+
+
 def publish_gods(gods):
     """
     gods: iterable of God objects (name, short_name, spawned, hp_pct).
