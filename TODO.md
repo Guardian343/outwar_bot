@@ -216,47 +216,85 @@ summary) and to action commands (guard-start) — see Critical below.
   NB: for MULTI-CREW the latch is still per-run/single-crew — revisit when multi-crew boss lands.
 
 - [ ] ⚡ Skill/pot casting SLOW — 206s  [Hard] — HANDLE WITH CARE (rate-limit history!)
-  Casting skills on ~197 accounts takes ~206s. ⚠️ THIS IS A DELIBERATE STABILITY TRADEOFF, NOT
-  UNOPTIMISED CODE. We tried to speed it up before and hit CONSTANT RATE LIMITS: accounts got
-  rate-limited mid-skill, FAILED to skill, and were then EXCLUDED from the raid — so we'd raid
-  with far fewer than 197 accounts, losing damage on EVERY raid that cycle. Backed off to slow-
-  but-complete to protect the account count (= protect damage). Liam believes it was specifically
-  the SKILL CASTING triggering the limits.
-  So the constraint is NOT "skill faster" — it's "skill ALL accounts faster WITHOUT the rate
-  limiter dropping any." Much harder. Do NOT just raise cast concurrency — that's the exact thing
-  that broke it. Possible real approaches to investigate (needs the cast code + ideally the old
-  rate-limit logs): (a) wave/batch casting sized to stay under the limit, (b) retry rate-limited
-  accounts before excluding them (so a transient 429 doesn't drop an account), (c) find whether
-  the limit is per-endpoint and interleave differently, (d) reduce redundant requests per account.
-  Bloop casts a group in ~5.69s BUT its screenshot showed only ~18 chars raiding / "Excluded 41"
-  — so Bloop may cast on a MUCH smaller group; the 206-vs-5.69 gap may be largely account-count,
-  not pure inefficiency. Confirm Bloop's cast account count before treating it as a 36x target.
-  HIGH VALUE if crackable (206s = ~3.5min of every MD cycle lost) but HIGH RISK — defer until we
-  can do it properly with logs.
+  Casting skills on ~197 accounts takes ~206s. ⚠️ DELIBERATE STABILITY TRADEOFF. We tried faster
+  before and hit CONSTANT RATE LIMITS: accounts rate-limited mid-skill → FAILED to skill → EXCLUDED
+  from the raid → raided with fewer than 197, losing damage every raid that cycle. Backed off to
+  slow-but-complete to protect account count (= protect damage).
+  ✅ CODE-LEVEL DIAGNOSIS DONE (2026-08-19, _cast_all_skills in boss_raid_commands.py ~line 144):
+    • Concurrency = Semaphore(10) (line ~173).
+    • Each account casts MULTIPLE skills SEQUENTIALLY in a for-loop (for skill_id in all_skills).
+    • ⭐ THE COST: `await asyncio.sleep(0.3)` after EVERY single skill cast (line ~257), INSIDE the
+      semaphore hold. So each account holds its slot for (n_skills × (request + 0.3s)). ~4-5 skills
+      × 0.3s = ~1.5s of pure SLEEP per account, ×~20 batches of 10 ≈ ~200s. That's the 206s.
+  ⭐ Liam's maths refutes "it's just account count": Bloop ~60 accts @ ~6s → 180 accts should be
+    ~18s. We're at 206s. So there's a genuine ~10x structural inefficiency ON TOP of account count,
+    and it's the 0.3s-per-skill sleep dominating — NOT irreducible rate-limit safety.
+  APPROACHES to investigate (needs live testing + the old rate-limit logs, do carefully):
+    (a) the 0.3s sleep is PER-SKILL — could it be per-ACCOUNT instead (one sleep after an account's
+        whole skill set, not after each skill)? That alone could cut it ~4-5x.
+    (b) raise Semaphore cautiously IN COMBINATION with (a), watching for the 429s that broke it.
+    (c) retry rate-limited accounts before excluding them (transient 429 shouldn't drop an account).
+    (d) whatever changes, PRESERVE the invariant: ALL accounts must skill (don't reintroduce the
+        exclude-on-rate-limit regression).
+  HIGH VALUE (206s = ~3.5min of every MD cycle) — but the rate limit is real; change + live-test.
+
+- [ ] 🌀 Last Stand recast DRIFT — REAL root cause (corrected 2026-08-19)  [Medium]
+  Observed 2026-08-17: 197 accts skilled at start (23:24), but LS recasts dribbled over 3.5 HOURS:
+  4 @23:33, 20+156 @02:08, 3 @02:18, 18 @03:03.
+  ❌ FIRST THEORY WRONG: "the 206s initial-cast spread smears the recasts." Liam correctly refuted
+  this with arithmetic — a 3.5-min cast spread can only cause a ~3.5-min recast spread, caught in
+  1-2 adjacent 5-min checks, NOT 3.5 hours. Discarded.
+  ✅ REAL CAUSES (from reading _recast_ls_bg, boss_raid_commands.py ~line 502):
+    (1) MD-ACTIVE GATE pauses recasting: line ~590 `if not md_currently_active: continue` skips the
+        WHOLE recast cycle when MD drops below 50% active. Due accounts pile up, then all fire at
+        once when MD returns → likely the "156 accounts @02:08" mega-batch (released backlog).
+    (2) PER-ACCOUNT COOLDOWN VARIANCE vs a HARDCODED 162 min (line ~547 ls_cooldown_mins=162, and
+        LS_RECAST_SECS=163min line ~532). Liam: cooldowns differ by account upgrades. Accounts cross
+        the fixed 163-min line at genuinely different real times → waves, not one batch.
+    (3) ⭐ FAILED-INITIAL-CAST → DEFAULT 0 BUG: if an account's LS didn't cleanly cast at start
+        (rate-limited/empty resp), it never gets a _ls_cast_times entry, so
+        _ls_cast_times.get(suid, 0) = 0, and `now_ts - 0 >= 163min` is ALWAYS TRUE → it's seen as
+        immediately due and recast on the very next 5-min check. THIS is the suspicious "4 accounts
+        @23:33" (9 min in — impossible for a real 162-min cooldown). Direct tie-in to the
+        rate-limit-during-skilling problem: failed casts default to 0 and fire early.
+  FIXES to consider: (a) give failed-initial-cast accounts a real cast_time or exclude them from the
+  due-check until genuinely cast (don't let 0 mean "due now"); (b) make the cooldown per-account not
+  a hardcoded 162; (c) reconsider the MD-gate so backlogs don't dam-and-release; (d) batching the
+  "due before next check" into fewer messages is cosmetic on top. NOTE: (a) is the clearest bug.
 
 - [ ] 🐢 Foreground task every few raids (~13s)  [Medium] — throughput drain, SAFER win than
-  skilling. From timing logs: most raids return ~1.6-2s, but every 3-4 raids one takes ~13s — the
-  full form→join→launch→stats cycle, where the join across ~196 accounts is ~4-5s. That heavy
-  cycle runs in the FOREGROUND (blocks the next raid). NOT gated by the skill rate-limit wall, so
-  potentially more tractable: can the heavy join/stats cycle be backgrounded or slimmed so it
-  doesn't stall the raid cadence? Investigate the _do_boss_raid path + why the full cycle recurs
-  every few raids (re-form trigger?). This + the skilling are the two raid-count levers.
+  skilling (not rate-limit-gated). From timing logs: most raids ~1.6-2s, but every 3-4 raids one
+  takes ~13s — the full form→join→launch→stats cycle (join across ~196 accounts ~4-5s) running in
+  the FOREGROUND, blocking the next raid. Investigate: can the heavy join/stats cycle be
+  backgrounded or slimmed? Why does the full cycle recur every few raids (re-form trigger)?
 
 - [ ] 🗣️ Rage-pause/resume messages (regression?)  [Easy-Medium] — Liam used to get "waiting for
-  rage / resuming" messages; now unsure if raids silently pause on low rage. Bloop does:
-  "Waiting to form a raid against <boss> for `CREW` · Limited rage." then "Resuming raids against
-  <boss> for `CREW`." The boss loop HAS a "⚠️ Low rage — waiting Xm" message — VERIFY it still
-  fires in autoboss, and add a matching "resuming" message when it rejoins after the wait.
+  rage / resuming"; now unsure if raids silently pause on low rage. Bloop: "Waiting to form a raid
+  against <boss> for `CREW` · Limited rage." then "Resuming raids against <boss> for `CREW`." The
+  boss loop HAS a "⚠️ Low rage — waiting Xm" message — VERIFY it still fires in autoboss, add the
+  matching "resuming" message when it rejoins.
 
 - [ ] ✨ First Strike embed  [Easy] — make the first-raid announcement a clean EMBED like Bloop:
   title "First Strike" (linked to raidattack.php?raidid=...), body "CREW did N damage to <boss>
   with X characters", "SiN was active" line. Currently a plain 🚩 message.
 
-- [ ] 📊 !boss dmg — compare vs Bloop's projected-drops version  [Easy] — we ALREADY have
-  !boss dmg (and !pcaps = Bloop's !gcaps). Bloop's !b dmg adds a PROJECTED DROPS column per crew
-  ("~ N drops" from damage share). Check if ours shows projected drops; if not, add it. Drop-
-  projection maths is unknown — work out how drops-per-crew derive from damage % (likely
-  threshold bands) before building. NOT a new command, just a possible enhancement to !boss dmg.
+- [ ] 📊 !boss dmg — add projected drops (Bloop parity)  [Medium] — CONFIRMED ours does NOT show
+  projected drops. Bloop's adds a per-crew "~ N drops" projection from damage share. Add a drops
+  column. Drop-projection maths unknown — work out how drops-per-crew derive from damage % (likely
+  threshold bands) before building. Enhancement to existing !boss dmg, not a new command.
+
+- [ ] 📊 !pcaps — add faction levels + total (Bloop parity)  [Easy] — CONFIRMED ours renders
+  differently: Bloop's cap-status table shows per-faction levels and a TOTAL faction levels row at
+  the bottom (e.g. "Alvar (78)", "Vordyn (46) Delruk (41) Alvar (25)"). Add faction-level totals to
+  our !pcaps render. (Screenshot ref: Bloop !gcaps AOE / VALZEK / AGNAR.)
+
+- [ ] 👤 !profile <outwar name>  [Medium] — BUILD FROM SCRATCH. Bloop's !profile shows a rich
+  character card: level, class, crew, Experience, Power, Hit Points, Elemental Attack, Elemental
+  Resist, Chaos Damage, Growth Yesterday, Wilderness Level, God Slayer Level, Faction, Parent, the
+  profile picture, equipped items grid, and skill crests, plus an "Open in Browser" link. Liam
+  notes "shouldn't be too difficult." Needs: fetch + parse the profile page for a given name, render
+  a card (reuse the existing table/card image renderer). (Screenshot ref: Bloop !profile
+  beastofthestorms.)
 
 - [ ] Event boss handling  [Medium] (observe first, 3-monthly) — should auto-handle via the
   live page; watch (1) drop summary completeness vs the fixed 15s wait (ties to loot-completion
