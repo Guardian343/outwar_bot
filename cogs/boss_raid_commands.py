@@ -1322,6 +1322,14 @@ class BossRaidCommands(commands.Cog):
                     continue  # back to top of outer loop to pick next boss
 
                 # Full MD recheck + skill recast path (MD genuinely expired or first run)
+                # A genuinely new cycle is starting (MD expired → about to recast skills
+                # and raid fresh). Reset the first-raid latch so the FIRST raid of THIS
+                # recharged cycle flags its damage again — !autoboss is a "start once, run
+                # forever" command, so each MD cycle should announce its first raid, not
+                # just the very first cycle of the whole run. Placed AFTER the "MD still
+                # active" fast-path continue (line ~1322), so a boss merely dying mid-cycle
+                # does NOT re-flag — only a true MD expiry/recast does.
+                first_raid_done = False
                 import re as _re2
                 sem = asyncio.Semaphore(10)
                 now_for_check = datetime.now().timestamp()

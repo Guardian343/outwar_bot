@@ -1042,6 +1042,11 @@ class RaidCommands(commands.Cog):
             await ctx.send(f"No characters found for `{group}`.")
             return
 
+        # Acknowledge immediately so the user isn't left staring at silence while
+        # the raid forms/joins/launches (which can take a few seconds). Without this
+        # the command looked unresponsive until the final embed appeared.
+        ack = await ctx.send(f"⚔️ Raiding **{god['name']}** with **{group}** ({len(trustees)} chars)…")
+
         won, damage, note = await self._do_god_raid(ctx, god, trustees)
 
         # Determine if raid was blocked vs actually attempted
@@ -1185,13 +1190,21 @@ class RaidCommands(commands.Cog):
                 total_wins += 1
                 raid_lines.append(f"**Raid {attempt} — Win** 🏆")
             else:
-                # Pull the HP% the god was left at, for the running list.
-                hp_txt = "no win"
-                if note:
-                    _m = re.search(r"~?([\d.]+)\s*%\s*HP", note)
-                    if _m:
-                        hp_txt = f"{float(_m.group(1)):.0f}%"
-                raid_lines.append(f"Raid {attempt} — {hp_txt}")
+                # Distinguish "raid ran but lost" (show HP% left) from "raid did not
+                # form/launch" (show the REASON — capped / low rage / couldn't form),
+                # so the user sees WHY, matching what !rm surfaces in its note.
+                _m = re.search(r"~?([\d.]+)\s*%\s*HP", note) if note else None
+                if _m:
+                    raid_lines.append(f"Raid {attempt} — {float(_m.group(1)):.0f}%")
+                elif note:
+                    # No HP% in the note → the raid didn't actually run; surface why.
+                    reason = note.strip()
+                    # Keep the line compact — trim overly long notes.
+                    if len(reason) > 60:
+                        reason = reason[:57] + "…"
+                    raid_lines.append(f"Raid {attempt} — ⚠️ {reason}")
+                else:
+                    raid_lines.append(f"Raid {attempt} — no win")
 
             try:
                 await status_msg.edit(embed=_build_embed())

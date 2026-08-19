@@ -182,10 +182,18 @@ summary) and to action commands (guard-start) — see Critical below.
 
 ## 🟡 Medium Priority (bot internals / raids)
 
+- [x] !rm / !rg output improvements  [DONE 2026-08-19] — !rm now sends an upfront
+  "⚔️ Raiding X with Y (N chars)…" acknowledgement (was silent until the end-result embed, which
+  left the user unsure it was working). !rg per-attempt lines now surface the REASON a raid didn't
+  form (⚠️ capped / low rage / couldn't form) vs just showing HP% on a loss — matching what !rm's
+  note already showed. (cogs/raid_commands.py)
+
 - [ ] Raid count / join concurrency  [Medium] — DEFERRED until the boss test run is done.
-  ~194 raids/264-min cycle ~= 82s/raid. Likely lever: raise the join semaphore (currently
-  Semaphore(3)). Action: add per-raid timing log (form/join/launch/fetch) FIRST to confirm
-  the join is the cost, then raise concurrency cautiously, watch for join rate-limiting.
+  ~200 raids/264-min cycle. TWO levers now identified: (1) the ~206s skill-cast eats ~3.5min/cycle
+  (see the "Skill/pot casting SLOW" item — likely the bigger win), (2) join concurrency: ~194
+  raids ~= 82s/raid, raise the join semaphore (currently Semaphore(3-7)). Action: per-raid timing
+  log (form/join/launch/fetch) to confirm join is the cost, then raise concurrency cautiously,
+  watch for join rate-limiting (logs show occasional rate-limited bursts).
 - [ ] Background task lifecycle — boss change  [Medium]
   When a boss dies + a new one spawns, the old cycle's `_cast_boss_pots_bg` / `_recast_ls_bg`
   may still run against the old `sorted_t` (only check `_stop_flag`). Fix: per-cycle cancel
@@ -201,8 +209,55 @@ summary) and to action commands (guard-start) — see Critical below.
   session instead of one batch (initial casts aren't simultaneous -> spread cast times -> 5-min
   check quantises into buckets). Functional but noisy + real timer drift. Fix: quiet the message,
   OR batch accounts due before next check, OR tighten interval.
-- [ ] First-raid-completed / MD-recharge flag  [Medium] — flag only posts when raids first
-  START, not on mid-session MD recharge. Needs addressing for MULTI-CREW boss raiding.
+- [x] First-raid-completed / MD-recharge flag  [Medium] — FIXED 2026-08-19. first_raid_done now
+  resets at the start of each genuine new MD cycle (the "full MD recheck + skill recast" path,
+  AFTER the "MD still active" fast-path continue — so a boss dying mid-cycle does NOT re-flag,
+  only a true MD expiry/recast does). Each recharged cycle now announces its first raid damage.
+  NB: for MULTI-CREW the latch is still per-run/single-crew — revisit when multi-crew boss lands.
+
+- [ ] ⚡ Skill/pot casting SLOW — 206s  [Hard] — HANDLE WITH CARE (rate-limit history!)
+  Casting skills on ~197 accounts takes ~206s. ⚠️ THIS IS A DELIBERATE STABILITY TRADEOFF, NOT
+  UNOPTIMISED CODE. We tried to speed it up before and hit CONSTANT RATE LIMITS: accounts got
+  rate-limited mid-skill, FAILED to skill, and were then EXCLUDED from the raid — so we'd raid
+  with far fewer than 197 accounts, losing damage on EVERY raid that cycle. Backed off to slow-
+  but-complete to protect the account count (= protect damage). Liam believes it was specifically
+  the SKILL CASTING triggering the limits.
+  So the constraint is NOT "skill faster" — it's "skill ALL accounts faster WITHOUT the rate
+  limiter dropping any." Much harder. Do NOT just raise cast concurrency — that's the exact thing
+  that broke it. Possible real approaches to investigate (needs the cast code + ideally the old
+  rate-limit logs): (a) wave/batch casting sized to stay under the limit, (b) retry rate-limited
+  accounts before excluding them (so a transient 429 doesn't drop an account), (c) find whether
+  the limit is per-endpoint and interleave differently, (d) reduce redundant requests per account.
+  Bloop casts a group in ~5.69s BUT its screenshot showed only ~18 chars raiding / "Excluded 41"
+  — so Bloop may cast on a MUCH smaller group; the 206-vs-5.69 gap may be largely account-count,
+  not pure inefficiency. Confirm Bloop's cast account count before treating it as a 36x target.
+  HIGH VALUE if crackable (206s = ~3.5min of every MD cycle lost) but HIGH RISK — defer until we
+  can do it properly with logs.
+
+- [ ] 🐢 Foreground task every few raids (~13s)  [Medium] — throughput drain, SAFER win than
+  skilling. From timing logs: most raids return ~1.6-2s, but every 3-4 raids one takes ~13s — the
+  full form→join→launch→stats cycle, where the join across ~196 accounts is ~4-5s. That heavy
+  cycle runs in the FOREGROUND (blocks the next raid). NOT gated by the skill rate-limit wall, so
+  potentially more tractable: can the heavy join/stats cycle be backgrounded or slimmed so it
+  doesn't stall the raid cadence? Investigate the _do_boss_raid path + why the full cycle recurs
+  every few raids (re-form trigger?). This + the skilling are the two raid-count levers.
+
+- [ ] 🗣️ Rage-pause/resume messages (regression?)  [Easy-Medium] — Liam used to get "waiting for
+  rage / resuming" messages; now unsure if raids silently pause on low rage. Bloop does:
+  "Waiting to form a raid against <boss> for `CREW` · Limited rage." then "Resuming raids against
+  <boss> for `CREW`." The boss loop HAS a "⚠️ Low rage — waiting Xm" message — VERIFY it still
+  fires in autoboss, and add a matching "resuming" message when it rejoins after the wait.
+
+- [ ] ✨ First Strike embed  [Easy] — make the first-raid announcement a clean EMBED like Bloop:
+  title "First Strike" (linked to raidattack.php?raidid=...), body "CREW did N damage to <boss>
+  with X characters", "SiN was active" line. Currently a plain 🚩 message.
+
+- [ ] 📊 !boss dmg — compare vs Bloop's projected-drops version  [Easy] — we ALREADY have
+  !boss dmg (and !pcaps = Bloop's !gcaps). Bloop's !b dmg adds a PROJECTED DROPS column per crew
+  ("~ N drops" from damage share). Check if ours shows projected drops; if not, add it. Drop-
+  projection maths is unknown — work out how drops-per-crew derive from damage % (likely
+  threshold bands) before building. NOT a new command, just a possible enhancement to !boss dmg.
+
 - [ ] Event boss handling  [Medium] (observe first, 3-monthly) — should auto-handle via the
   live page; watch (1) drop summary completeness vs the fixed 15s wait (ties to loot-completion
   polling), (2) cosmetic "next spawn window" for the dead-on-page week.
