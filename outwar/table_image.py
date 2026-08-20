@@ -42,6 +42,24 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
         return ImageFont.load_default()
 
 
+# Faction colours — exact Outwar in-game colour codes:
+#   Alvar = elemental (blue) · Delruk = power (orange) · Vordyn = chaos (purple)
+FACTION_COLOURS = {
+    "alvar":  (0x3a, 0xa0, 0xff),   # #3aa0ff
+    "delruk": (0xff, 0x8a, 0x1a),   # #ff8a1a
+    "vordyn": (0xc4, 0x4d, 0xff),   # #c44dff
+}
+
+
+def faction_colour(name: str) -> tuple:
+    """RGB for a faction name (case-insensitive), stripping any '(level)' suffix.
+    Falls back to a neutral dim colour for unknown factions."""
+    if not name:
+        return TEXT_DIM
+    key = name.strip().lower().split(" (")[0].split("(")[0].strip()
+    return FACTION_COLOURS.get(key, TEXT_DIM)
+
+
 def _text_w(draw: ImageDraw.ImageDraw, text: str, font) -> int:
     return draw.textlength(text, font=font)
 
@@ -53,6 +71,7 @@ def render_table(
     rows: list[dict],
     footer: str = "",
     accent: tuple = None,
+    footer_segments: list = None,   # optional [(text, rgb), ...] drawn as a centred coloured line below the footer
 ) -> io.BytesIO:
     """
     Render a styled dark table as PNG.
@@ -95,7 +114,8 @@ def render_table(
     header_block = HEADER_H
     rows_block   = ROW_H * n_rows
     footer_lines = footer.split("\n") if footer else []
-    footer_block = (ROW_H * len(footer_lines) + 8) if footer_lines else 0
+    _seg_rows = 1 if footer_segments else 0
+    footer_block = (ROW_H * (len(footer_lines) + _seg_rows) + 8) if (footer_lines or footer_segments) else 0
     total_h      = PADDING_Y + title_block + header_block + rows_block + footer_block + PADDING_Y
 
     img  = Image.new("RGB", (total_w, total_h), BG_DARK)
@@ -170,9 +190,10 @@ def render_table(
         row_y += ROW_H
 
     # Footer
-    if footer:
-        footer_lines = footer.split("\n")
-        footer_h = ROW_H * len(footer_lines) + 8
+    if footer or footer_segments:
+        footer_lines = footer.split("\n") if footer else []
+        n_lines = len(footer_lines) + (1 if footer_segments else 0)
+        footer_h = ROW_H * n_lines + 8
         draw.rectangle([0, row_y, total_w, row_y + footer_h], fill=BG_HEADER)
         draw.rectangle([PADDING_X, row_y, total_w - PADDING_X, row_y + 1], fill=DIVIDER)
         for i, line in enumerate(footer_lines):
@@ -180,6 +201,17 @@ def render_table(
             line_w = _text_w(draw, line, font_footer)
             x = max(PADDING_X, (total_w - line_w) / 2)
             draw.text((x, row_y + 8 + i * ROW_H), line, font=font_footer, fill=TEXT_DIM)
+        # Coloured segment line (e.g. faction totals, each in its faction colour),
+        # centred as a single row below the plain footer lines.
+        if footer_segments:
+            gap = _text_w(draw, "   ", font_footer)
+            seg_ws = [_text_w(draw, str(t), font_footer) for t, _ in footer_segments]
+            total_seg_w = sum(seg_ws) + gap * (len(footer_segments) - 1)
+            x = max(PADDING_X, (total_w - total_seg_w) / 2)
+            y = row_y + 8 + len(footer_lines) * ROW_H
+            for (text, rgb), w in zip(footer_segments, seg_ws):
+                draw.text((x, y), str(text), font=font_footer, fill=rgb)
+                x += w + gap
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -219,7 +251,7 @@ def render_caps_table(group: str, results: list[dict]) -> io.BytesIO:
 
     columns = [
         {"key": "name",     "label": "Character",  "align": "left",   "color_fn": name_color},
-        {"key": "faction",  "label": "Faction",    "align": "left",   "color_fn": lambda r: TEXT_BLUE},
+        {"key": "faction",  "label": "Faction",    "align": "left",   "color_fn": lambda r: faction_colour(r.get("faction_name") or r.get("faction"))},
         {"key": "caps_str", "label": "Caps",       "align": "center", "color_fn": cap_color},
         {"key": "next_cap", "label": "Next Cap",   "align": "center", "color_fn": lambda r: TEXT_DIM},
         {"key": "crew",     "label": "Crew",       "align": "left",   "color_fn": lambda r: TEXT_DIM},
@@ -243,19 +275,20 @@ def render_caps_table(group: str, results: list[dict]) -> io.BytesIO:
 
     footer = f"{not_capped} not capped  ·  {capped} capped  ·  {len(results)} total"
 
-    # Faction-level totals (like Bloop's "Alvar (78)  Vordyn (46)  Delruk (41)").
-    # Sum each faction's levels across the group, ranked highest first.
+    # Faction-level totals (like Bloop's "Alvar (78)  Vordyn (46)  Delruk (41)"),
+    # each rendered in its faction colour. Sum each faction's levels, ranked highest.
     faction_totals: dict = {}
     for r in results:
         fname = r.get("faction_name")
         if fname and fname not in ("—", "None"):
             faction_totals[fname] = faction_totals.get(fname, 0) + int(r.get("faction_level", 0) or 0)
+    seg = None
     if faction_totals:
         ranked = sorted(faction_totals.items(), key=lambda kv: kv[1], reverse=True)
-        faction_line = "   ".join(f"{name} ({lvl})" for name, lvl in ranked)
-        footer = f"{footer}\n{faction_line}"
+        seg = [(f"{name} ({lvl})", faction_colour(name)) for name, lvl in ranked]
 
-    return render_table(f"CAP STATUS — {group.upper()}", subtitle, columns, rows, footer)
+    return render_table(f"CAP STATUS — {group.upper()}", subtitle, columns, rows, footer,
+                        footer_segments=seg)
 
 
 def render_stats_table(group: str, results: list[dict]) -> io.BytesIO:

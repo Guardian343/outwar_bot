@@ -1862,16 +1862,23 @@ class BossRaidCommands(commands.Cog):
                         continue
 
                     if under_minimum and secs_to_hour > 0:
-                        # Not enough rage — wait for hour reset
+                        # Not enough rage — wait for hour reset. Announce the pause
+                        # (Bloop-style: names the boss + crew), then announce resuming
+                        # when we rejoin, so it's never a silent stop.
                         wait_mins = secs_to_hour // 60
+                        _crew = self._status.get("source", group_name or "Crew")
                         await notify.send(
-                            f"⚠️ Low rage — waiting **{wait_mins}m** for hourly reset, then rejoining..."
+                            f"⏸️ Waiting to form a raid against **{current_boss}** for "
+                            f"`{_crew}` · Limited rage — hourly reset in **{wait_mins}m**."
                         )
                         for _ in range(secs_to_hour // 5):
                             if self._stop_flag:
                                 break
                             await asyncio.sleep(5)
                         if not self._stop_flag:
+                            await notify.send(
+                                f"▶️ Resuming raids against **{current_boss}** for `{_crew}`."
+                            )
                             # Get remaining accounts to join the existing raid
                             damage, _, __, _new_rec, launch_ts = await self._do_boss_raid(sorted_t, current_boss)
 
@@ -2187,12 +2194,16 @@ class BossRaidCommands(commands.Cog):
 
                 if under_minimum and secs_to_hour and secs_to_hour > 0:
                     wait_mins = secs_to_hour // 60
-                    await ctx.send(f"⚠️ Low rage — waiting **{wait_mins}m** for the hourly reset...")
+                    await ctx.send(
+                        f"⏸️ Waiting to form a raid against **{current_boss}** · "
+                        f"Limited rage — hourly reset in **{wait_mins}m**."
+                    )
                     for _ in range(secs_to_hour // 5):
                         if self._stop_flag:
                             break
                         await asyncio.sleep(5)
                     if not self._stop_flag:
+                        await ctx.send(f"▶️ Resuming raids against **{current_boss}**.")
                         damage, _, __, _nr, launch_ts = await self._do_boss_raid(sorted_t, current_boss)
 
                 done         += 1
