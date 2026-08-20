@@ -835,6 +835,8 @@ class GroupStatCommands(commands.Cog):
                     "max":     max_cap,
                     "error":   False,
                     "faction": f"{faction} ({flvl})" if flvl else faction,
+                    "faction_name":  faction,   # raw name for totals
+                    "faction_level": flvl,       # raw level for totals
                     "crew":    t.get("crew", "—"),
                     "rage":    live_rage,
                 }

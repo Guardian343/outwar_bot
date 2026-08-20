@@ -176,7 +176,10 @@ def render_table(
         draw.rectangle([0, row_y, total_w, row_y + footer_h], fill=BG_HEADER)
         draw.rectangle([PADDING_X, row_y, total_w - PADDING_X, row_y + 1], fill=DIVIDER)
         for i, line in enumerate(footer_lines):
-            draw.text((PADDING_X, row_y + 8 + i * ROW_H), line, font=font_footer, fill=TEXT_DIM)
+            # Centre each footer line horizontally.
+            line_w = _text_w(draw, line, font_footer)
+            x = max(PADDING_X, (total_w - line_w) / 2)
+            draw.text((x, row_y + 8 + i * ROW_H), line, font=font_footer, fill=TEXT_DIM)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -239,6 +242,19 @@ def render_caps_table(group: str, results: list[dict]) -> io.BytesIO:
         })
 
     footer = f"{not_capped} not capped  ·  {capped} capped  ·  {len(results)} total"
+
+    # Faction-level totals (like Bloop's "Alvar (78)  Vordyn (46)  Delruk (41)").
+    # Sum each faction's levels across the group, ranked highest first.
+    faction_totals: dict = {}
+    for r in results:
+        fname = r.get("faction_name")
+        if fname and fname not in ("—", "None"):
+            faction_totals[fname] = faction_totals.get(fname, 0) + int(r.get("faction_level", 0) or 0)
+    if faction_totals:
+        ranked = sorted(faction_totals.items(), key=lambda kv: kv[1], reverse=True)
+        faction_line = "   ".join(f"{name} ({lvl})" for name, lvl in ranked)
+        footer = f"{footer}\n{faction_line}"
+
     return render_table(f"CAP STATUS — {group.upper()}", subtitle, columns, rows, footer)
 
 

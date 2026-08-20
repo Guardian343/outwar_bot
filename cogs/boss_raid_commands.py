@@ -141,6 +141,46 @@ class BossRaidCommands(commands.Cog):
     # Helpers — skill checking
     # ------------------------------------------------------------------
 
+    def _cycle_summary_embed(self, crew, boss, raids, damage, best, ready_ts=None):
+        """Clean end-of-MD-cycle summary: what the just-finished cycle achieved,
+        posted when MD expires and the bot waits for recharge."""
+        e = discord.Embed(
+            title=f"🔄 MD cycle complete — {crew}",
+            colour=discord.Colour.blurple(),
+        )
+        if boss:
+            e.description = f"Last boss raided: **{boss}**"
+        e.add_field(name="Raids", value=f"{raids:,}", inline=True)
+        e.add_field(name="Total damage", value=f"{damage:,}", inline=True)
+        if best:
+            e.add_field(name="Best raid", value=f"{best:,}", inline=True)
+        if raids > 0:
+            e.add_field(name="Avg / raid", value=f"{damage // raids:,}", inline=True)
+        if ready_ts:
+            e.add_field(name="MD recharged", value=f"<t:{ready_ts}:R>", inline=True)
+        e.set_footer(text="Waiting for MD recharge, then the next cycle starts automatically.")
+        return e
+
+    def _first_strike_embed(self, crew, boss, damage, chars, total):
+        """Bloop-style 'First Strike' embed for the first raid of a cycle:
+        title links to the raidattack page, body states crew/damage/char count,
+        and notes SiN if one was cast this session."""
+        raidid = self._status.get("last_raid_id")
+        sin_name = self._status.get("sin_name", "—")
+        e = discord.Embed(
+            title="⚔️ First Strike",
+            colour=discord.Colour.green(),
+        )
+        if raidid:
+            e.url = f"https://sigil.outwar.com/raidattack.php?raidid={raidid}"
+        e.description = (
+            f"**{crew}** did **{damage:,}** damage to **{boss}** "
+            f"with **{chars}** character{'s' if chars != 1 else ''}."
+        )
+        if sin_name and sin_name not in ("—", "", "No SiN Cast"):
+            e.set_footer(text=f"SiN was active · {sin_name}")
+        return e
+
     async def _cast_all_skills(self, trustees: list, ctx) -> dict:
         """
         Cast all boss skills on all trustees.
@@ -916,6 +956,7 @@ class BossRaidCommands(commands.Cog):
                 logger.warning("BOSS_RAID", f"[RAID-DEBUG] No raidid in raid_url: {raid_url!r}")
                 return 0, False, 0, False, 0.0
             raidid = raidid_m.group(1)
+            self._status["last_raid_id"] = raidid  # for the First Strike embed link
             logger.info("BOSS_RAID", f"[RAID-DEBUG] raid_url={raid_url!r} raidid={raidid} former={former.get('name')} (suid={former_suid})")
 
             # Join all accounts concurrently using post_as — no cookie mutation,
@@ -1288,9 +1329,8 @@ class BossRaidCommands(commands.Cog):
                                     f"🏆 **New record on {current_boss}!** {damage:,} damage")
                             _crew = self._status.get("source", group_name or "Crew")
                             _chars = self._status.get("last_raid_chars", len(sorted_t))
-                            await notify.send(
-                                f"🚩 **{_crew}** is up and raiding — first raid complete: "
-                                f"**{damage:,}** damage · {_chars}/{len(sorted_t)} accounts.")
+                            await notify.send(embed=self._first_strike_embed(
+                                _crew, current_boss, damage, _chars, len(sorted_t)))
                             first_raid_done = True
                             self._status.update({"raids": session_raids, "damage": session_damage})
                         else:
@@ -1474,12 +1514,28 @@ class BossRaidCommands(commands.Cog):
                     # trained from the persistent-state check above — no need
                     # to re-sample a single account via a fresh network poll.
                     if md_cooldown:
+                        # End-of-cycle summary — report what the just-finished MD cycle
+                        # achieved before waiting for recharge. Uses self._status values
+                        # (always safely present) rather than loop-local vars (which may
+                        # be out of scope here). Only post if we actually raided this cycle.
+                        _cyc_raids  = self._status.get("raids", 0)
+                        _cyc_damage = self._status.get("damage", 0)
+                        _cyc_best   = self._status.get("best_raid", 0)
+                        _cyc_crew   = self._status.get("source", group_name or "Crew")
+                        _cyc_boss   = self._status.get("boss")
                         # Safety floor — never wait less than 60s even if the calculated
                         # remaining time is near-zero. Prevents any tight-loop scenario
                         # where "recharged" -> instant recheck -> "still cooldown" repeats.
                         safe_cd_mins = max(1, longest_cd_mins)
                         ready_ts = int(datetime.now().timestamp()) + safe_cd_mins * 60
                         self._status["phase"] = "waiting_md"
+                        if _cyc_raids and _cyc_raids > 0:
+                            try:
+                                await notify.send(embed=self._cycle_summary_embed(
+                                    _cyc_crew, _cyc_boss, _cyc_raids, _cyc_damage,
+                                    _cyc_best, ready_ts))
+                            except Exception:
+                                pass  # summary is best-effort — never block the recharge wait
                         await notify.send(
                             f"⏳ MD on cooldown for all **{len(md_cooldown)}** trained accounts — "
                             f"ready <t:{ready_ts}:R>. Waiting for recharge before raiding..."
@@ -1831,9 +1887,8 @@ class BossRaidCommands(commands.Cog):
                         # Green flag — first confirmed raid of the run (Loop B path).
                         _crew  = self._status.get("source", group_name or "Crew")
                         _chars = self._status.get("last_raid_chars", len(sorted_t))
-                        await notify.send(
-                            f"🚩 **{_crew}** is up and raiding — first raid complete: "
-                            f"**{damage:,}** damage · {_chars}/{len(sorted_t)} accounts.")
+                        await notify.send(embed=self._first_strike_embed(
+                            _crew, current_boss, damage, _chars, len(sorted_t)))
                         first_raid_done = True
                     if new_record and damage > 0:
                         await notify.send(
