@@ -422,6 +422,56 @@ def render_who_table(name: str, data: dict) -> io.BytesIO:
     return render_table(f"CHARACTER — {name.upper()}", subtitle, columns, rows, "")
 
 
+def render_profile(profile: dict) -> io.BytesIO:
+    """Render a rich character profile card from parse_full_profile() output.
+    Shows the standard profile stats as a two-column card, faction in its colour."""
+    name  = profile.get("name") or "—"
+    level = profile.get("level", 0)
+    klass = profile.get("klass", "")
+    crew  = profile.get("crew", "")
+    stats = profile.get("stats", {})
+
+    columns = [
+        {"key": "label", "label": "Stat",  "align": "left",  "color_fn": lambda r: TEXT_HEADER},
+        {"key": "value", "label": "Value", "align": "right", "color_fn": lambda r: r.get("color", TEXT_WHITE)},
+    ]
+
+    # Preferred display order (only shown if present); anything else appended after.
+    preferred = [
+        "Experience", "Total Power", "Hit Points", "Elemental Attack",
+        "Elemental Resist", "Chaos Damage", "Growth Yesterday",
+        "Wilderness Level", "God Slayer Level", "Faction", "Parent",
+    ]
+    rows = []
+    if crew:
+        rows.append({"label": "Crew", "value": crew, "color": TEXT_DIM})
+    seen = set()
+    for label in preferred:
+        if label in stats:
+            seen.add(label)
+            colour = TEXT_WHITE
+            if label == "Faction":
+                colour = faction_colour(profile.get("faction_name"))
+            elif label in ("Elemental Attack", "Elemental Resist"):
+                colour = TEXT_GREEN
+            elif label in ("Chaos Damage",):
+                colour = TEXT_GOLD
+            rows.append({"label": label, "value": stats[label], "color": colour})
+    # Any remaining stat rows we didn't explicitly order.
+    for label, value in stats.items():
+        if label not in seen:
+            rows.append({"label": label, "value": value, "color": TEXT_WHITE})
+
+    subtitle_bits = []
+    if level:
+        subtitle_bits.append(f"LEVEL {level}")
+    if klass:
+        subtitle_bits.append(klass.upper())
+    subtitle = "  ·  ".join(subtitle_bits)
+
+    return render_table(f"{name.upper()}", subtitle, columns, rows, "")
+
+
 def render_status_table(data: dict) -> io.BytesIO:
     """Render bot status as an image card."""
     columns = [

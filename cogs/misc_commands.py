@@ -881,6 +881,42 @@ class GroupStatCommands(commands.Cog):
         await msg.delete()
         await ctx.send(file=discord.File(buf, filename="cap_status.png"))
 
+    @commands.command(name="profile")
+    async def profile(self, ctx, *, name: str):
+        """
+        Show a character's full profile card by Outwar name.
+        Usage: !profile <outwar name>
+        """
+        name = name.strip()
+        if not name:
+            await ctx.send("Usage: `!profile <outwar name>`")
+            return
+
+        msg = await ctx.send(f"🔎 Fetching profile for **{name}**…")
+        try:
+            from outwar.scraper import parse_full_profile
+            from outwar.table_image import render_profile
+            html = await self.session.get(f"profile.php?transnick={name}&server=1")
+            profile = parse_full_profile(html)
+
+            if not profile.get("stats") and not profile.get("name"):
+                await msg.edit(content=f"❌ Couldn't find a profile for **{name}** "
+                                       f"(check the spelling, or the character may not exist).")
+                return
+
+            # Fall back to the requested name if the page heading didn't parse.
+            if not profile.get("name"):
+                profile["name"] = name
+
+            buf = render_profile(profile)
+            url = f"https://sigil.outwar.com/profile?transnick={name}&serverid=1"
+            await msg.delete()
+            await ctx.send(content=f"🔗 [Open in Browser]({url})",
+                           file=discord.File(buf, filename="profile.png"))
+        except Exception as e:
+            logger.warning("MISC", f"[profile] error for {name}: {e}")
+            await msg.edit(content=f"⚠️ Error fetching profile for **{name}**: `{e}`")
+
     @commands.command(name="group-stats")
     async def group_stats(self, ctx, *, group: str):
         """Show power, ele, chaos and faction for all characters in a group. Usage: !group-stats <group>"""

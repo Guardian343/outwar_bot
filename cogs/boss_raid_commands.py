@@ -2060,7 +2060,11 @@ class BossRaidCommands(commands.Cog):
 
         spawned = await self._get_spawned_bosses()
         if boss:
-            current_boss = next((b for b in BOSS_PRIORITY if boss.lower() in b.lower()), None)
+            # Match live-spawned bosses first (catches event bosses not in
+            # BOSS_PRIORITY, e.g. Solkaar), then fall back to the priority list.
+            current_boss = next((b for b in spawned if boss.lower() in b.lower()), None)
+            if not current_boss:
+                current_boss = next((b for b in BOSS_PRIORITY if boss.lower() in b.lower()), None)
         else:
             current_boss = spawned[0] if spawned else None
 
@@ -2071,8 +2075,20 @@ class BossRaidCommands(commands.Cog):
         await ctx.send(f"⚔️ Raiding **{current_boss}** with **{len(trustees)}** accounts...")
 
         sorted_t = sorted(trustees, key=lambda t: t.get("rage", 0), reverse=True)
-        damage, _, __, _new_rec, launch_ts = await self._do_boss_raid(sorted_t, current_boss)
-        await ctx.send(f"**{current_boss}** · {damage:,} dmg")
+        self._running   = True
+        self._stop_flag = False
+        try:
+            damage, _, __, _new_rec, launch_ts = await asyncio.wait_for(
+                self._do_boss_raid(sorted_t, current_boss), timeout=180
+            )
+            await ctx.send(f"**{current_boss}** · {damage:,} dmg")
+        except asyncio.TimeoutError:
+            await ctx.send(f"🚨 Raid on **{current_boss}** timed out (180s) — aborted.")
+        except Exception as e:
+            await ctx.send(f"🚨 Raid error: `{e}`")
+        finally:
+            self._running   = False
+            self._stop_flag = False
 
     @commands.command(name="bossraid", aliases=["br"])
     async def bossraid(self, ctx, group: str, *args):

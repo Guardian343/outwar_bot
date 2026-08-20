@@ -188,6 +188,77 @@ def parse_character_stats_profile(html: str) -> dict:
     return stats
 
 
+def parse_full_profile(html: str) -> dict:
+    """
+    Rich profile parse for the !profile command card. Reads every label/value row
+    in the profile stats table generically (so it captures whatever Outwar shows —
+    Experience, Power, Hit Points, Elemental Attack, Elemental Resist, Chaos Damage,
+    Growth Yesterday, Wilderness Level, God Slayer Level, Faction, Parent, etc.),
+    plus name, level, class, and crew from the page chrome.
+
+    Returns a dict with:
+      name, level, klass, crew, faction, faction_name, faction_level,
+      and a `stats` dict of {label: value_str} for every profile row found.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    out = {
+        "name": "", "level": 0, "klass": "", "crew": "",
+        "faction": "", "faction_name": "", "faction_level": 0,
+        "stats": {},
+    }
+
+    # --- Name: usually the page's main heading ---
+    for sel in ("h1", "h2", ".profile_name", ".char_name"):
+        node = soup.select_one(sel)
+        if node:
+            txt = node.get_text(strip=True).replace("†", "").strip()
+            if txt:
+                out["name"] = txt
+                break
+
+    # --- Level + class: often "Level 95 · Gangster" style text near the name ---
+    body_txt = soup.get_text(" ", strip=True)
+    m = re.search(r"Level\s+(\d+)", body_txt)
+    if m:
+        out["level"] = int(m.group(1))
+    for kls in ("Gangster", "Mobster", "Bomber", "Merc", "Elemental", "Chaos", "Monster"):
+        if re.search(rf"\b{kls}\b", body_txt):
+            out["klass"] = kls
+            break
+
+    # --- Crew: the crew_profile / crew_home link ---
+    for pat in ("crew_profile?id=", "crew_home?id="):
+        for link in soup.find_all("a", href=lambda h: h and pat in h):
+            text = link.get_text(strip=True).replace("†", "").strip()
+            if text:
+                out["crew"] = text
+                break
+        if out["crew"]:
+            break
+
+    # --- Every label/value row in the profile stats table(s) ---
+    for row in soup.find_all("tr"):
+        cells = row.find_all("td")
+        if len(cells) >= 2:
+            label = cells[0].get_text(strip=True)
+            value = cells[1].get_text(strip=True)
+            if not label or not value:
+                continue
+            low = label.lower()
+            out["stats"][label] = value
+            if low == "faction":
+                fm = re.match(r"(.+?)\s*\((\d+)\)", value)
+                if fm:
+                    out["faction_name"] = fm.group(1).strip()
+                    out["faction"] = fm.group(1).strip()
+                    out["faction_level"] = int(fm.group(2))
+                elif value and value.lower() != "none":
+                    out["faction_name"] = value
+                    out["faction"] = value
+
+    return out
+
+
 def parse_max_rage(html: str):
     """Extract max rage value from world page."""
     soup = BeautifulSoup(html, "lxml")

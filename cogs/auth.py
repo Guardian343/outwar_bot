@@ -97,7 +97,7 @@ MEMBER_COMMANDS = {
     "compare", "skills", "show-mr", "get-sessid",
     "crawl-status", "envoys",
     "rage", "who", "top", "bottom", "top-all",
-    "group-stats", "pcaps", "eligible", "uncapped",
+    "group-stats", "pcaps", "eligible", "uncapped", "profile",
     "badge", "tce", "crest", "rg", "rq",
     # --- Running raids / PW / boss raids (members may do these) ---
     "autoboss", "bossraid", "raidboss",

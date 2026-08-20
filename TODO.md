@@ -182,6 +182,46 @@ summary) and to action commands (guard-start) — see Critical below.
 
 ## 🟡 Medium Priority (bot internals / raids)
 
+- [ ] 👥 MULTI-CREW concurrent boss raiding  [Hard] — real limitation, needs per-crew state
+  LIMITATION (confirmed 2026-08-19): the bot can only run ONE boss session at a time. Starting
+  `!boss auto lod` sets a SINGLE cog-wide `self._running=True`; a second `!boss auto <crew2>` then
+  hits `if self._running: return` → "session already running". To raid crew2 you must !boss-stop
+  crew1 first — no good if crew1 is mid-boss (and Liam's lower crew lacks raid skills, so he wants
+  them raiding a boss the main crew can't/independently).
+  ROOT CAUSE: ALL raid state is SINGLE-INSTANCE on the cog (line ~128-133): self._running,
+  self._stop_flag, self._status, self._sin_index, self._ls_cast_times — one of each. The whole
+  boss-raid system assumes one crew raids at a time.
+  ⚠️ Simply removing the guard would NOT work — two sessions would COLLIDE on the shared
+  self._status, the session cookie (both switching ow_userid mid-request), and LS-cast tracking —
+  the same class of cross-contamination as the dual-server name-collision bug. The guard is
+  currently PROTECTING against that.
+  PROPER FIX (same pattern as dual-server scoping): key ALL raid state PER-CREW — e.g.
+  self._sessions[crew], self._status[crew], self._ls_cast_times[crew], self._stop_flags[crew] —
+  and run each crew's _run_autoboss as its own task. Significant refactor (touches the whole raid
+  path). Relates to the "First-raid flag is per-run/single-crew" note. Big build — scope carefully.
+  Interim options if needed sooner: (a) a SECOND bot instance for the lower crew (own process/token),
+  (b) accept one-crew-at-a-time for now.
+
+- [ ] 🔍 raidboss/bossraid/autoboss HANDLING inconsistencies (found 2026-08-19 review)  [Medium]
+  Compared how the three boss-raid commands HANDLE things (not what they do). autoboss (run-forever,
+  casts skills) + bossraid/br (raid spawned boss N times, no cast) are both hardened; raidboss (one
+  round, no cast) is the OUTLIER — oldest/simplest, missed the hardening:
+    (1) ⭐ NO _running GUARD: autoboss + bossraid both `if self._running: return` (blocks duplicate
+        sessions + makes !boss-stop meaningful). raidboss sets NEITHER _running nor _stop_flag, so it
+        can START MID-AUTOBOSS and collide on the shared session/cookie state — a real risk given the
+        session history. HIGHEST-VALUE fix, tiny + safe: add the _running guard to raidboss.
+    (2) NO TIMEOUT/ERROR PROTECTION: autoboss wraps _do_boss_raid in asyncio.wait_for(180s) + 3x
+        timeout handling + try/except; bossraid does too. raidboss calls _do_boss_raid RAW — a hang
+        hangs the command forever, an exception errors out ungracefully.
+    (3) BOSS MATCHING: bossraid matches live-spawned-first THEN priority list (catches event bosses
+        like Solkaar not in BOSS_PRIORITY). raidboss matches BOSS_PRIORITY ONLY → can't raid a live
+        event boss. autoboss has its own logic.
+    (4) NO RAGE HANDLING: raidboss ignores under_minimum silently (no wait/resume). Minor (one-shot).
+  Intentional diff (KEEP): autoboss survives-and-continues on repeated timeout (pause 5min, keep
+  going); bossraid STOPS the session on 3x timeout. Correct for run-forever vs bounded.
+  Suggested fix order: (1) _running guard [tiny, do first], then (2)+(3) bring raidboss up to
+  bossraid's resilience, or consider whether raidboss is even still needed vs bossraid.
+
 - [x] !rm / !rg output improvements  [DONE 2026-08-19] — !rm now sends an upfront
   "⚔️ Raiding X with Y (N chars)…" acknowledgement (was silent until the end-result embed, which
   left the user unsure it was working). !rg per-attempt lines now surface the REASON a raid didn't
