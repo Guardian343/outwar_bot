@@ -884,38 +884,87 @@ class GroupStatCommands(commands.Cog):
     @commands.command(name="profile")
     async def profile(self, ctx, *, name: str):
         """
-        Show a character's full profile card by Outwar name.
-        Usage: !profile <outwar name>
+        Show a character's full profile card (stats + equipment paperdoll + crests),
+        faithful to Outwar's own profile layout. Usage: !profile <outwar name>
         """
         name = name.strip()
         if not name:
             await ctx.send("Usage: `!profile <outwar name>`")
             return
 
-        msg = await ctx.send(f"🔎 Fetching profile for **{name}**…")
+        msg = await ctx.send(f"🔎 Building profile for **{name}**…")
         try:
-            from outwar.scraper import parse_full_profile
-            from outwar.table_image import render_profile
-            html = await self.session.get(f"profile.php?transnick={name}&server=1")
-            profile = parse_full_profile(html)
+            import io as _io
+            import asyncio as _asyncio
+            import aiohttp as _aiohttp
+            from PIL import Image as _PILImage
+            from outwar.scraper import (
+                parse_full_profile, parse_equipment_paperdoll, parse_skill_crests,
+            )
+            from outwar.table_image import render_profile_full, render_profile
 
+            # 1. Fetch the profile page (items live on it — no separate endpoint).
+            prof_html = await self.session.get(f"profile.php?transnick={name}&server=1")
+            profile = parse_full_profile(prof_html)
             if not profile.get("stats") and not profile.get("name"):
                 await msg.edit(content=f"❌ Couldn't find a profile for **{name}** "
                                        f"(check the spelling, or the character may not exist).")
                 return
-
-            # Fall back to the requested name if the page heading didn't parse.
             if not profile.get("name"):
                 profile["name"] = name
 
-            buf = render_profile(profile)
-            url = f"https://sigil.outwar.com/profile?transnick={name}&serverid=1"
+            paperdoll = parse_equipment_paperdoll(prof_html)
+            crests    = parse_skill_crests(prof_html)
+
+            # 2. Collect every UNIQUE image URL (dedup — many gems share an image),
+            #    then download them concurrently but BOUNDED (rate-limit-safe).
+            SIGIL = "https://sigil.outwar.com"
+            urls = set()
+            for it in paperdoll["items"]:
+                if it.get("img"):
+                    urls.add(it["img"])
+            for cr in crests:
+                if cr.get("img"):
+                    urls.add(cr["img"])
+
+            item_icons = {}
+            if urls:
+                sem = _asyncio.Semaphore(8)  # bounded concurrency (won't flood)
+
+                async def _dl(http, url):
+                    full = url
+                    if full.startswith("/"):
+                        full = SIGIL + full
+                    elif not full.startswith("http"):
+                        full = f"{SIGIL}/{full}"
+                    async with sem:
+                        try:
+                            async with http.get(full, timeout=_aiohttp.ClientTimeout(total=10)) as r:
+                                if r.status == 200:
+                                    return url, _PILImage.open(_io.BytesIO(await r.read()))
+                        except Exception:
+                            return url, None
+                    return url, None
+
+                async with _aiohttp.ClientSession() as http:
+                    results = await _asyncio.gather(*[_dl(http, u) for u in urls])
+                for url, im in results:
+                    if im is not None:
+                        item_icons[url] = im
+
+            # 3. Render — full paperdoll if we parsed items, else the stat card.
+            if paperdoll["items"]:
+                buf = render_profile_full(profile, paperdoll, crests, item_icons)
+            else:
+                buf = render_profile(profile)
+
+            url = f"{SIGIL}/profile?transnick={name}&serverid=1"
             await msg.delete()
             await ctx.send(content=f"🔗 [Open in Browser]({url})",
                            file=discord.File(buf, filename="profile.png"))
         except Exception as e:
             logger.warning("MISC", f"[profile] error for {name}: {e}")
-            await msg.edit(content=f"⚠️ Error fetching profile for **{name}**: `{e}`")
+            await msg.edit(content=f"⚠️ Error building profile for **{name}**: `{e}`")
 
     @commands.command(name="group-stats")
     async def group_stats(self, ctx, *, group: str):

@@ -188,6 +188,117 @@ def parse_character_stats_profile(html: str) -> dict:
     return stats
 
 
+def parse_equipment_paperdoll(html: str) -> dict:
+    """
+    Parse the equipped-items paperdoll from a profile.php page. Each item is an
+    absolutely-positioned <img> inside a container div that carries the background
+    'thedude.png' paperdoll. We read each item's real left/top/width/height so the
+    layout can be replicated faithfully (not approximated as a grid).
+
+    Returns:
+      {
+        "bg_w": int, "bg_h": int,               # paperdoll container size
+        "items": [
+          {"id","img","alt","x","y","w","h"},   # one per equipped item / gem
+          ...
+        ],
+      }
+    An empty items list means none were found (page structure differed).
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    # Find the equipment container: a div whose style references thedude.png.
+    container = None
+    for div in soup.find_all("div", style=True):
+        if "thedude.png" in (div.get("style") or ""):
+            container = div
+            break
+    if container is None:
+        return {"bg_w": 300, "bg_h": 385, "items": []}
+
+    def _px(style, prop):
+        m = re.search(rf"{prop}\s*:\s*(\d+)px", style or "")
+        return int(m.group(1)) if m else 0
+
+    cstyle = container.get("style") or ""
+    bg_w = _px(cstyle, "width") or 300
+    bg_h = _px(cstyle, "height") or 385
+
+    items = []
+    # Each item sits in an absolutely-positioned child div; the img is inside.
+    for cell in container.find_all("div", recursive=False):
+        cstyle = cell.get("style") or ""
+        x = _px(cstyle, "left")
+        y = _px(cstyle, "top")
+        w = _px(cstyle, "width")
+        h = _px(cstyle, "height")
+        # A cell may hold multiple imgs (e.g. a row of 3 orbs) — lay them across.
+        imgs = cell.find_all("img")
+        n = len(imgs)
+        for i, img in enumerate(imgs):
+            src = img.get("src")
+            if not src:
+                continue
+            over = img.get("onmouseover") or img.get("ONMOUSEOVER") or ""
+            m = re.search(r"itempopup\(event,'(\d+)'\)", over)
+            iid = m.group(1) if m else ""
+            # If several imgs share one cell, split the cell width across them.
+            sub_w = (w // n) if (n > 1 and w) else w
+            items.append({
+                "id": iid,
+                "img": src,
+                "alt": img.get("alt", ""),
+                "x": x + (i * sub_w if n > 1 else 0),
+                "y": y,
+                "w": sub_w or 40,
+                "h": h or 40,
+            })
+    return {"bg_w": bg_w, "bg_h": bg_h, "items": items}
+
+
+def parse_skill_crests(html: str) -> list:
+    """
+    Parse the SKILL CRESTS row (separate section, skillcrest.png background).
+    Returns [{"id","img","alt","x","y","w","h"}, ...] in page order.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    container = None
+    for div in soup.find_all("div", style=True):
+        if "skillcrest.png" in (div.get("style") or ""):
+            container = div
+            break
+    if container is None:
+        return []
+
+    def _px(style, prop):
+        m = re.search(rf"{prop}\s*:\s*(\d+)px", style or "")
+        return int(m.group(1)) if m else 0
+
+    crests = []
+    for cell in container.find_all("div", recursive=False):
+        cstyle = cell.get("style") or ""
+        img = cell.find("img")
+        if not img or not img.get("src"):
+            continue
+        over = img.get("onmouseover") or img.get("ONMOUSEOVER") or ""
+        m = re.search(r"itempopup\(event,'(\d+)'\)", over)
+        crests.append({
+            "id": m.group(1) if m else "",
+            "img": img.get("src"),
+            "alt": img.get("alt", ""),
+            "x": _px(cstyle, "left"), "y": _px(cstyle, "top"),
+            "w": _px(cstyle, "width") or 60, "h": _px(cstyle, "height") or 60,
+        })
+    return crests
+
+
+def parse_equipped_items(html: str) -> list:
+    """Back-compat: flat list of equipped item {id,img} (no coords). Prefer
+    parse_equipment_paperdoll for layout-faithful rendering."""
+    pd = parse_equipment_paperdoll(html)
+    return [{"id": it["id"], "img": it["img"]} for it in pd["items"] if it["id"]]
+
+
 def parse_full_profile(html: str) -> dict:
     """
     Rich profile parse for the !profile command card. Reads every label/value row

@@ -472,6 +472,153 @@ def render_profile(profile: dict) -> io.BytesIO:
     return render_table(f"{name.upper()}", subtitle, columns, rows, "")
 
 
+def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = None,
+                        item_icons: dict = None) -> io.BytesIO:
+    """
+    Render a showpiece profile card faithful to Outwar's own layout: 2-column stat
+    block on the left, and the real equipment PAPERDOLL on the right (items placed
+    at their true coordinates, not a grid), plus a skill-crests row beneath.
+
+    profile:    parse_full_profile() output
+    paperdoll:  parse_equipment_paperdoll() output ({"bg_w","bg_h","items":[...]})
+    crests:     parse_skill_crests() output (list)
+    item_icons: {url: PIL.Image} — pre-downloaded icons (downloading happens in the
+                command; the renderer only composites). Missing icons draw a slot box.
+    """
+    paperdoll = paperdoll or {"bg_w": 300, "bg_h": 385, "items": []}
+    crests = crests or []
+    item_icons = item_icons or {}
+
+    name  = profile.get("name") or "—"
+    level = profile.get("level", 0)
+    klass = profile.get("klass", "")
+    crew  = profile.get("crew", "")
+    stats = profile.get("stats", {})
+
+    font_title = _load_font(30, bold=True)
+    font_sub   = _load_font(17, bold=True)
+    font_lab   = _load_font(13, bold=True)
+    font_val   = _load_font(14)
+    font_sec   = _load_font(14, bold=True)
+
+    # ---- Left column: 2-column stat block (like the real PLAYER INFO) ----
+    preferred = [
+        "Experience", "Total Power", "Hit Points", "Elemental Attack",
+        "Elemental Resist", "Chaos Damage", "Growth Yesterday",
+        "Wilderness Level", "God Slayer Level", "Faction", "Parent",
+    ]
+    ordered = []
+    if crew:
+        ordered.append(("Crew", crew, TEXT_DIM))
+    seen = set()
+    for label in preferred:
+        if label in stats:
+            seen.add(label)
+            colour = TEXT_WHITE
+            if label == "Faction":
+                colour = faction_colour(profile.get("faction_name"))
+            elif label in ("Elemental Attack", "Elemental Resist"):
+                colour = TEXT_GREEN
+            elif label == "Chaos Damage":
+                colour = TEXT_GOLD
+            ordered.append((label, stats[label], colour))
+    for label, value in stats.items():
+        if label not in seen:
+            ordered.append((label, value, TEXT_WHITE))
+
+    # ---- Layout metrics ----
+    PAD        = 26
+    TITLE_H    = 92
+    stat_h     = 46           # each stat cell (label above value)
+    left_w     = 300
+    dollscale  = 1.15         # scale the paperdoll up slightly for presence
+    doll_w     = int(paperdoll["bg_w"] * dollscale)
+    doll_h     = int(paperdoll["bg_h"] * dollscale)
+
+    crest_h = 0
+    if crests:
+        crest_h = 40 + 72  # header + one crest row
+
+    left_block  = TITLE_H + len(ordered) * stat_h + PAD
+    right_block = TITLE_H + doll_h + crest_h + PAD
+    total_h = max(left_block, right_block) + PAD
+    total_w = PAD + left_w + PAD + doll_w + PAD
+
+    img  = Image.new("RGB", (total_w, total_h), BG_DARK)
+    draw = ImageDraw.Draw(img)
+
+    # ---- Title ----
+    draw.rectangle([0, 0, total_w, TITLE_H], fill=BG_TITLE)
+    draw.rectangle([0, 0, total_w, 4], fill=ACCENT)
+    draw.text((PAD, 20), name, font=font_title, fill=TEXT_WHITE)
+    sub_bits = []
+    if level: sub_bits.append(f"Level {level}")
+    if klass: sub_bits.append(klass)
+    if sub_bits:
+        draw.text((PAD, 58), "  ·  ".join(sub_bits), font=font_sub, fill=TEXT_GOLD)
+
+    # ---- Left: PLAYER INFO, two stats per row ----
+    draw.text((PAD, TITLE_H + 4), "PLAYER INFO", font=font_sec, fill=TEXT_HEADER)
+    y = TITLE_H + 30
+    col_w = left_w // 2
+    for i, (label, value, colour) in enumerate(ordered):
+        col = i % 2
+        row = i // 2
+        cx = PAD + col * col_w
+        cy = y + row * stat_h
+        draw.text((cx, cy), label.upper(), font=font_lab, fill=TEXT_DIM)
+        draw.text((cx, cy + 16), str(value), font=font_val, fill=colour)
+
+    # ---- Right: the equipment paperdoll at true coordinates ----
+    dx0 = PAD + left_w + PAD
+    dy0 = TITLE_H + 4
+    draw.text((dx0, dy0), "EQUIPMENT", font=font_sec, fill=TEXT_HEADER)
+    dy0 += 26
+    # subtle backing panel
+    draw.rectangle([dx0 - 6, dy0 - 6, dx0 + doll_w + 6, dy0 + doll_h + 6],
+                   fill=BG_HEADER, outline=DIVIDER)
+    for it in paperdoll["items"]:
+        ix = dx0 + int(it["x"] * dollscale)
+        iy = dy0 + int(it["y"] * dollscale)
+        iw = max(8, int(it["w"] * dollscale))
+        ih = max(8, int(it["h"] * dollscale))
+        icon = item_icons.get(it["img"])
+        if icon is not None:
+            try:
+                ic = icon.convert("RGBA").resize((iw, ih))
+                img.paste(ic, (ix, iy), ic)
+                continue
+            except Exception:
+                pass
+        draw.rectangle([ix, iy, ix + iw, iy + ih], outline=DIVIDER)
+
+    # ---- Skill crests row beneath the paperdoll ----
+    if crests:
+        cy0 = dy0 + doll_h + 16
+        draw.text((dx0, cy0), "SKILL CRESTS", font=font_sec, fill=TEXT_HEADER)
+        cy0 += 24
+        # crests carry their own x within a 300-wide strip; scale to match doll
+        for cr in crests:
+            cx = dx0 + int(cr["x"] * dollscale)
+            cyy = cy0 + int(cr["y"] * dollscale)
+            cw = max(8, int(cr["w"] * dollscale))
+            ch = max(8, int(cr["h"] * dollscale))
+            icon = item_icons.get(cr["img"])
+            if icon is not None:
+                try:
+                    ic = icon.convert("RGBA").resize((cw, ch))
+                    img.paste(ic, (cx, cyy), ic)
+                    continue
+                except Exception:
+                    pass
+            draw.rectangle([cx, cyy, cx + cw, cyy + ch], outline=DIVIDER)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
 def render_status_table(data: dict) -> io.BytesIO:
     """Render bot status as an image card."""
     columns = [
