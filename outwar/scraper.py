@@ -70,10 +70,14 @@ class GodDrop:
 
 @dataclass
 class Envoy:
-    envoy_id: int = 0
-    name: str = ""
+    envoy_id: int = 0          # target number (1-8)
+    name: str = ""             # the player appearing as this envoy
     spawned: bool = False
     stats_url: str = ""
+    title: str = ""            # e.g. "Mob Envoy", "PvP Envoy", "Alvar Envoy", "PP Envoy (Hard)"
+    combat: str = ""           # combat system: Mob / PvP / Raid
+    rage: int = 0              # rage cost to attack
+    image: str = ""            # avatar image URL
 
 
 @dataclass
@@ -1121,6 +1125,67 @@ def format_time_remaining(seconds: int) -> str:
 # ---------------------------------------------------------------------------
 # Envoy scraping
 # ---------------------------------------------------------------------------
+
+def parse_envoy_overview(html: str) -> list[Envoy]:
+    """
+    Parse the envoy OVERVIEW page (envoy_overview) — the current card-based layout.
+    Each envoy is a <div class="envoy-card"> with:
+      .envoy-title            → type ("Mob Envoy", "PvP Envoy", "Alvar Envoy", "PP Envoy (Hard)"…)
+      .envoy-name a           → the player appearing as the envoy
+      a[href*="target=N"]     → the target number
+      .combat-system-value    → combat system (Mob / PvP / Raid)
+      Rage stat-row .stat-value → rage cost
+      .envoy-image img[src]   → avatar
+    Returns a list of Envoy, one per card, in page order (targets 1-8).
+    """
+    soup = BeautifulSoup(html, "lxml")
+    envoys = []
+
+    for card in soup.select("div.envoy-card"):
+        try:
+            title_el = card.select_one(".envoy-title")
+            title = title_el.get_text(strip=True) if title_el else ""
+
+            name_el = card.select_one(".envoy-name a") or card.select_one(".envoy-name")
+            name = name_el.get_text(strip=True) if name_el else ""
+
+            # target number from any href with target=N
+            target = 0
+            link = card.select_one('a[href*="target="]')
+            if link:
+                m = re.search(r"target=(\d+)", link.get("href", ""))
+                if m:
+                    target = int(m.group(1))
+
+            combat_el = card.select_one(".combat-system-value")
+            combat = combat_el.get_text(strip=True) if combat_el else ""
+
+            # Rage: the stat-row whose label is "Rage"
+            rage = 0
+            for row in card.select(".stat-row"):
+                lab = row.select_one(".stat-label")
+                val = row.select_one(".stat-value")
+                if lab and val and lab.get_text(strip=True).lower() == "rage":
+                    rage = int(re.sub(r"[^\d]", "", val.get_text()) or 0)
+                    break
+
+            img_el = card.select_one(".envoy-image img")
+            image = img_el.get("src", "") if img_el else ""
+
+            # "locked" cards (envoy-card-locked) are not currently attackable/open
+            classes = card.get("class", [])
+            spawned = "envoy-card-open" in classes or "envoy-card-locked" not in classes
+
+            envoys.append(Envoy(
+                envoy_id=target, name=name, spawned=spawned,
+                stats_url=f"envoy?target={target}" if target else "",
+                title=title, combat=combat, rage=rage, image=image,
+            ))
+        except Exception as e:
+            logger.warning("SCRAPER", f"Error parsing envoy card: {e}")
+
+    return envoys
+
 
 def parse_envoys(html: str) -> list[Envoy]:
     """Parse envoy entries from the primegods page."""

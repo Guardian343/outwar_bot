@@ -1691,30 +1691,24 @@ class GodMonitor(commands.Cog):
 
     @commands.command(name="envoys")
     async def envoy_status(self, ctx):
-        """Show current envoy spawn status."""
+        """Show the current envoy lineup (who's appearing, combat type, rage cost)."""
         await ctx.send("🔍 Checking Envoys...")
-        html = await self.session.get("primegods")
-        envoys = parse_envoys(html)
+        from outwar.scraper import parse_envoy_overview
+        html = await self.session.get("envoy_overview")
+        envoys = parse_envoy_overview(html)
         self._envoys_cache[1] = envoys
 
         if not envoys:
             await ctx.send("No envoys found on the page.")
             return
 
-        spawned = [e for e in envoys if e.spawned]
-        dead = [e for e in envoys if not e.spawned]
-
-        embed = es.info_embed(f"{es.ICON_ENVOY} Envoy Status")
-        embed.add_field(
-            name=f"🌟 Spawned ({len(spawned)})",
-            value="\n".join(f"**{e.name}**" for e in spawned) or "None",
-            inline=True
-        )
-        if dead:
+        embed = es.info_embed(f"{es.ICON_ENVOY} Current Envoys")
+        for e in envoys:
+            title = e.title or f"Target {e.envoy_id}"
             embed.add_field(
-                name=f"💀 Dead ({len(dead)})",
-                value="\n".join(e.name for e in dead),
-                inline=True
+                name=title,
+                value=f"**{e.name}**\n{e.combat} · {e.rage:,} rage",
+                inline=True,
             )
         await ctx.send(embed=embed)
 
