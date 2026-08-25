@@ -11,6 +11,7 @@ Usage: !crawl <character_name>
 import asyncio
 import json
 import os
+import re
 from collections import deque
 from discord.ext import commands
 from datetime import datetime
@@ -23,10 +24,30 @@ SIGIL_URL = URL("https://sigil.outwar.com")
 MAP_SEED  = os.path.join(os.path.dirname(__file__), "..", "outwar", "map_graph.json")
 MAP_PATH  = os.path.join(os.path.dirname(__file__), "..", "database", "map_graph.json")
 MOBS_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "crawl_mobs.json")
+LOCKED_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "locked_rooms.json")
 
 # Rate limit — requests per second
 CRAWL_DELAY    = 0.3   # seconds between moves
 PROGRESS_EVERY = 100   # post update every N rooms
+
+
+def parse_locked_room(raw: str):
+    """
+    Detect a key-locked room response and extract the required key/item name.
+    Trying to enter a locked room returns an HTML swal2 pop-up like:
+      <h2 class="swal2-title">To enter this room you must be carrying Text of
+      Echoes. <p>Head <a ...>back to last room</a></p>...</h2>
+    (HTML, not the JSON a normal room move returns — that's the signal it's locked.)
+    The key name sits right after "must be carrying" and before the "." / next tag.
+    Returns the required key name (str), or None if not a locked-room response.
+    """
+    if not raw:
+        return None
+    m = re.search(r"must be carrying\s+(.+?)\s*[.<]", raw, re.IGNORECASE)
+    if m:
+        key = re.sub(r"<[^>]+>", "", m.group(1)).strip()  # strip any stray tags
+        return key or None
+    return None
 
 
 def parse_room_payload(raw: str):
@@ -178,6 +199,12 @@ class CrawlerCommands(commands.Cog):
             visited   = set()
             new_rooms = 0
             new_mobs  = 0
+            # Locked rooms discovered THIS run: {room_id: {"key": name, "from": room}}.
+            # Only rooms this character got BOUNCED from (i.e. it lacks the key) land
+            # here — an account WITH the key enters fine and learns nothing about the
+            # lock, which is exactly why merging across differently-keyed accounts
+            # (below, in _save) builds the full picture.
+            locked_rooms = {}
 
             def _record(parsed, rid):
                 nonlocal new_mobs
@@ -248,10 +275,23 @@ class CrawlerCommands(commands.Cog):
                     continue
 
                 if parsed is None:
-                    self._stats["errors"] += 1
+                    # A failed JSON parse is usually the key-locked HTML swal2 pop-up
+                    # ("must be carrying <KEY>"). Capture it as a locked room (with the
+                    # key), so routing later knows this room is key-gated and which key.
+                    key = parse_locked_room(raw)
+                    if key:
+                        locked_rooms[nxt] = {"key": key, "from": current}
+                        self._stats["locked"] += 1
+                    else:
+                        self._stats["errors"] += 1
                     continue
                 if parsed["actual_room"] != nxt:
-                    # couldn't enter (key-locked / restricted) — stay put, try next neighbour
+                    # Entered elsewhere than intended — also key-locked/restricted.
+                    key = parse_locked_room(raw)
+                    if key:
+                        locked_rooms[nxt] = {"key": key, "from": current}
+                    else:
+                        locked_rooms.setdefault(nxt, {"key": None, "from": current})
                     self._stats["locked"] += 1
                     continue
 
@@ -266,10 +306,10 @@ class CrawlerCommands(commands.Cog):
                         f"\U0001F5FA\uFE0F **Crawl progress** \u2014 {len(visited):,} rooms visited \u00b7 "
                         f"{new_rooms:,} new rooms \u00b7 {new_mobs:,} new mobs \u00b7 "
                         f"depth {len(stack)} \u00b7 {self._stats['locked']} locked")
-                    self._save(map_graph, crawl_mobs)
+                    self._save(map_graph, crawl_mobs, locked_rooms, char_name)
 
             # Final save
-            self._save(map_graph, crawl_mobs)
+            self._save(map_graph, crawl_mobs, locked_rooms, char_name)
 
             elapsed = int((datetime.now() - self._stats["started"]).total_seconds())
             mins, secs = divmod(elapsed, 60)
@@ -295,13 +335,48 @@ class CrawlerCommands(commands.Cog):
         finally:
             self._crawling = False
 
-    def _save(self, map_graph: dict, crawl_mobs: dict):
+    def _save(self, map_graph: dict, crawl_mobs: dict, locked_rooms: dict = None,
+              char_name: str = None):
         """Save map graph and mob data to disk (database/, which survives deploys)."""
         os.makedirs(os.path.dirname(MAP_PATH), exist_ok=True)
         with open(MAP_PATH, "w") as f:
             json.dump({str(k): v for k, v in map_graph.items()}, f)
         with open(MOBS_PATH, "w") as f:
             json.dump(crawl_mobs, f, indent=2)
+
+        # ---- Locked-room knowledge: MERGE across crawls, only ever GROW ----
+        # Key facts about the world (room → required key) are learned from whichever
+        # account gets BOUNCED. An account WITH the key enters fine and learns nothing
+        # about the lock — so a keyed account's crawl must NEVER erase a keyless
+        # account's key-requirement knowledge. We merge complementary knowledge:
+        #   - key:         the required key/item (once known from ANY crawl, kept).
+        #   - blocked_for: characters observed to lack the key (couldn't enter).
+        # (Reachability — who CAN enter — is implicit in each account's own map; the
+        # global table here just records the world fact "room X needs key Y".)
+        if locked_rooms is not None:
+            merged = {}
+            try:
+                if os.path.exists(LOCKED_PATH):
+                    with open(LOCKED_PATH) as f:
+                        merged = json.load(f)
+            except Exception:
+                merged = {}
+            for rid, info in locked_rooms.items():
+                rid = str(rid)
+                existing = merged.get(rid, {})
+                # Keep any key we already knew; fill it in if this crawl learned it.
+                key = info.get("key") or existing.get("key")
+                blocked = set(existing.get("blocked_for", []))
+                if char_name:
+                    blocked.add(char_name)
+                merged[rid] = {
+                    "key":         key,
+                    "from":        info.get("from") or existing.get("from"),
+                    "blocked_for": sorted(blocked),
+                }
+            with open(LOCKED_PATH, "w") as f:
+                json.dump(merged, f, indent=2)
+
         # Refresh the live pathfinder so find_path() uses the freshly crawled map
         try:
             from outwar import scraper
@@ -312,6 +387,29 @@ class CrawlerCommands(commands.Cog):
     # ------------------------------------------------------------------
     # !crawl-stop
     # ------------------------------------------------------------------
+
+    @commands.command(name="locked")
+    async def locked_rooms_cmd(self, ctx):
+        """Show key-locked rooms discovered by the crawl (room → required key)."""
+        try:
+            with open(LOCKED_PATH) as f:
+                locked = json.load(f)
+        except Exception:
+            locked = {}
+        if not locked:
+            await ctx.send("No key-locked rooms recorded yet. Run a crawl first.")
+            return
+        by_key = {}
+        for rid, info in locked.items():
+            k = info.get("key") or "Unknown key"
+            by_key.setdefault(k, []).append(rid)
+        lines = [f"🔒 **Key-locked rooms** ({len(locked)} total)"]
+        for k in sorted(by_key):
+            rooms = ", ".join(sorted(by_key[k], key=lambda x: int(x)))
+            lines.append(f"**{k}**: {rooms}")
+        msg = "\n".join(lines)
+        for i in range(0, len(msg), 1900):
+            await ctx.send(msg[i:i+1900])
 
     @commands.command(name="crawl-test")
     async def crawl_test(self, ctx, character: str, room: int):
