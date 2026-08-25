@@ -586,13 +586,30 @@ class CharacterCommands(commands.Cog):
         rga_group = db.get_group(target)
         if rga_group:
             names = set(db.group_to_list(rga_group))
-            return [t for t in all_trustees if t["name"] in names]
+            return self._dedup_by_name([t for t in all_trustees if t["name"] in names])
         crew = db.get_crew(target)
         crew_full = crew["full_name"] if crew else db.normalize_crew(target)
         by_crew = db.get_trustees_by_crew(crew_full)
         if by_crew:
-            return by_crew
-        return [t for t in all_trustees if t["name"].lower() == target.lower()]
+            return self._dedup_by_name(by_crew)
+        return self._dedup_by_name([t for t in all_trustees if t["name"].lower() == target.lower()])
+
+    @staticmethod
+    def _dedup_by_name(trustees: list) -> list:
+        """Dedup trustees by name. A character on BOTH servers (Sigil + Torax) has a
+        trustee entry per server, so an unscoped name lookup matches both copies and
+        the character would be actioned/counted twice. Keep the first per name.
+        (Same dual-server name-collision class that _resolve_group already guards via
+        server scoping; here dedup is the right fix since these commands aren't
+        inherently per-server.)"""
+        seen = set()
+        out = []
+        for t in trustees:
+            key = t["name"].lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(t)
+        return out
 
     async def _fetch_character(self, name: str):
         try:

@@ -582,7 +582,20 @@ class MiscCommands(commands.Cog):
                 if not trustees:
                     trustees = [t for t in all_trustees if t["name"].lower() == group.lower()]
 
-        return [t for t in trustees if t.get("level", 0) >= min_level]
+        result = [t for t in trustees if t.get("level", 0) >= min_level]
+        # Dedup by name: a character that exists on BOTH servers (Sigil + Torax) has
+        # a trustee entry per server, so an unscoped name filter matches both copies
+        # → the character was appearing twice in !top/!bottom rankings. Keep the first
+        # occurrence per name. (Ranking is by character name/stats, not per-server, so
+        # one entry per name is correct here.)
+        seen = set()
+        deduped = []
+        for t in result:
+            key = t["name"].lower()
+            if key not in seen:
+                seen.add(key)
+                deduped.append(t)
+        return deduped
 
     async def _fetch_characters_parallel(self, trustees: list) -> list:
         semaphore = asyncio.Semaphore(SEMAPHORE_SIZE)
