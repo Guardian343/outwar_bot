@@ -192,6 +192,41 @@ def parse_character_stats_profile(html: str) -> dict:
     return stats
 
 
+def parse_item_augments(html: str) -> list:
+    """
+    Parse an item's augment slots from its item_rollover.php?id=<itemID> page.
+    Structure (confirmed from the OWMod script's parseSelectedItem + SLOT_RE):
+      - The FIRST non-gem <img> is the item's own icon (skip it).
+      - Every subsequent <img> that is either augslot.jpg (an EMPTY slot) or has
+        itempopup(event,'ITEMID_SLOT') (a FILLED augment) is an augment slot, in
+        slot order (1, 2, 3…).
+    Returns an ordered list of slots:
+      [{"filled": bool, "img": src, "aug_id": "ITEMID_SLOT" or None}, ...]
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    def _is_gem(img):
+        src = (img.get("src") or "")
+        over = (img.get("onmouseover") or img.get("ONMOUSEOVER") or "")
+        return ("augslot.jpg" in src.lower()) or bool(re.search(r"itempopup\(event,'\d+_\d+'\)", over))
+
+    slots = []
+    seen_item_icon = False
+    for img in soup.find_all("img"):
+        if not _is_gem(img):
+            # First non-gem img = the item's own icon; skip just that one.
+            seen_item_icon = True
+            continue
+        src = img.get("src") or ""
+        over = img.get("onmouseover") or img.get("ONMOUSEOVER") or ""
+        if "augslot.jpg" in src.lower():
+            slots.append({"filled": False, "img": src, "aug_id": None})
+        else:
+            m = re.search(r"itempopup\(event,'(\d+_\d+)'\)", over)
+            slots.append({"filled": True, "img": src, "aug_id": m.group(1) if m else None})
+    return slots
+
+
 def parse_equipment_paperdoll(html: str) -> dict:
     """
     Parse the equipped-items paperdoll from a profile.php page. Each item is an

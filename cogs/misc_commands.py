@@ -901,7 +901,7 @@ class GroupStatCommands(commands.Cog):
             from outwar.scraper import (
                 parse_full_profile, parse_equipment_paperdoll, parse_skill_crests,
             )
-            from outwar.table_image import render_profile_full, render_profile
+            from outwar.table_image import render_profile_full, render_profile, pick_item_frame
 
             # 1. Fetch the profile page (items live on it — no separate endpoint).
             prof_html = await self.session.get(f"profile.php?transnick={name}&server=1")
@@ -916,9 +916,40 @@ class GroupStatCommands(commands.Cog):
             paperdoll = parse_equipment_paperdoll(prof_html)
             crests    = parse_skill_crests(prof_html)
 
-            # 2. Collect every UNIQUE image URL (dedup — many gems share an image),
-            #    then download them concurrently but BOUNDED (rate-limit-safe).
+            # 2. Equipped augments: fetch each item's item_rollover.php to read its
+            #    augment slots (confirmed via OWMod: augments live in the rollover, not
+            #    the profile page). Only real equipped items (numeric id) have rollovers.
+            from outwar.scraper import parse_item_augments
             SIGIL = "https://sigil.outwar.com"
+            augments = []
+            item_ids = [it["id"] for it in paperdoll["items"]
+                        if it.get("id") and "_" not in it["id"]]
+            if item_ids:
+                rsem = _asyncio.Semaphore(6)  # bounded — one rollover per item
+
+                async def _roll(http, iid):
+                    async with rsem:
+                        try:
+                            url = f"{SIGIL}/item_rollover.php?id={iid}"
+                            async with http.get(url, timeout=_aiohttp.ClientTimeout(total=10)) as r:
+                                if r.status == 200:
+                                    return iid, await r.text()
+                        except Exception:
+                            return iid, None
+                    return iid, None
+
+                async with _aiohttp.ClientSession() as http:
+                    rolls = await _asyncio.gather(*[_roll(http, i) for i in item_ids])
+                # Preserve equip order, keep only FILLED augments for the grid.
+                roll_map = {iid: html for iid, html in rolls if html}
+                for iid in item_ids:
+                    if iid in roll_map:
+                        for slot in parse_item_augments(roll_map[iid]):
+                            if slot.get("filled") and slot.get("img"):
+                                augments.append({"img": slot["img"], "filled": True})
+
+            # 3. Collect every UNIQUE image URL (dedup — many gems share an image),
+            #    then download them concurrently but BOUNDED (rate-limit-safe).
             urls = set()
             for it in paperdoll["items"]:
                 if it.get("img"):
@@ -926,6 +957,9 @@ class GroupStatCommands(commands.Cog):
             for cr in crests:
                 if cr.get("img"):
                     urls.add(cr["img"])
+            for aug in augments:
+                if aug.get("img"):
+                    urls.add(aug["img"])
 
             item_icons = {}
             if urls:
@@ -941,7 +975,10 @@ class GroupStatCommands(commands.Cog):
                         try:
                             async with http.get(full, timeout=_aiohttp.ClientTimeout(total=10)) as r:
                                 if r.status == 200:
-                                    return url, _PILImage.open(_io.BytesIO(await r.read()))
+                                    raw = _PILImage.open(_io.BytesIO(await r.read()))
+                                    # Item/aug icons are often animated glow GIFs — pick
+                                    # the fully-lit frame, not the dim frame 0.
+                                    return url, pick_item_frame(raw)
                         except Exception:
                             return url, None
                     return url, None
@@ -952,9 +989,9 @@ class GroupStatCommands(commands.Cog):
                     if im is not None:
                         item_icons[url] = im
 
-            # 3. Render — full paperdoll if we parsed items, else the stat card.
+            # 4. Render — full paperdoll (+ augments) if we parsed items, else stat card.
             if paperdoll["items"]:
-                buf = render_profile_full(profile, paperdoll, crests, item_icons)
+                buf = render_profile_full(profile, paperdoll, crests, item_icons, augments)
             else:
                 buf = render_profile(profile)
 

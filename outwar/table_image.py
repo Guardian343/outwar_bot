@@ -3,7 +3,40 @@ table_image.py — Renders a styled table as a PNG image for Discord posting.
 Mimics the dark-themed cap/stats table style.
 """
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageSequence
+
+
+def pick_item_frame(im: "Image.Image") -> "Image.Image":
+    """
+    Outwar item/augment icons are often animated GIFs with a glow/fade effect. PIL
+    opens them on frame 0, which for a fade is usually the DIMMEST frame (item nearly
+    invisible, only the background glow) — so composited items looked like "just the
+    background effect". This scans all frames and returns the one with the most visible
+    content (highest mean luminance over opaque pixels). Static images pass through.
+    """
+    try:
+        frames = [fr.convert("RGBA") for fr in ImageSequence.Iterator(im)]
+        if len(frames) <= 1:
+            return im.convert("RGBA")
+
+        def _score(f):
+            px = f.load()
+            w, h = f.size
+            step = max(1, min(w, h) // 24)
+            tot, n = 0.0, 0
+            for yy in range(0, h, step):
+                for xx in range(0, w, step):
+                    r, g, b, a = px[xx, yy]
+                    if a > 20:
+                        tot += (r + g + b); n += 1
+            return (tot / n) if n else 0.0
+
+        return max(frames, key=_score)
+    except Exception:
+        try:
+            return im.convert("RGBA")
+        except Exception:
+            return im
 import io
 
 # Fonts
@@ -474,21 +507,26 @@ def render_profile(profile: dict) -> io.BytesIO:
 
 
 def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = None,
-                        item_icons: dict = None) -> io.BytesIO:
+                        item_icons: dict = None, augments: list = None) -> io.BytesIO:
     """
     Render a showpiece profile card faithful to Outwar's own layout: 2-column stat
-    block on the left, and the real equipment PAPERDOLL on the right (items placed
-    at their true coordinates, not a grid), plus a skill-crests row beneath.
+    block on the left, the real equipment PAPERDOLL in the middle (items at their true
+    coordinates), a skill-crests row beneath, and an EQUIPPED AUGMENTS grid down the
+    right side (OW-Mod style).
 
     profile:    parse_full_profile() output
     paperdoll:  parse_equipment_paperdoll() output ({"bg_w","bg_h","items":[...]})
     crests:     parse_skill_crests() output (list)
     item_icons: {url: PIL.Image} — pre-downloaded icons (downloading happens in the
                 command; the renderer only composites). Missing icons draw a slot box.
+    augments:   list of {"img": url, "filled": bool} for every equipped augment slot,
+                in order — rendered as a grid on the right. item_icons must contain the
+                downloaded PIL image for each augment's img url.
     """
     paperdoll = paperdoll or {"bg_w": 300, "bg_h": 385, "items": []}
     crests = crests or []
     item_icons = item_icons or {}
+    augments = augments or []
 
     name  = profile.get("name") or "—"
     level = profile.get("level", 0)
@@ -541,10 +579,21 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
     if crests:
         crest_h = 40 + 72  # header + one crest row
 
+    # ---- Augment grid metrics (right column, OW-Mod style) ----
+    AUG_CELL   = 30           # each augment gem cell (icon + small gap)
+    aug_cols   = 7            # gems per row (matches the OW-Mod's ~7-wide grid)
+    aug_w      = 0
+    aug_h      = 0
+    if augments:
+        aug_rows = (len(augments) + aug_cols - 1) // aug_cols
+        aug_w    = aug_cols * AUG_CELL + PAD  # grid + a little breathing room
+        aug_h    = 40 + aug_rows * AUG_CELL   # header + rows
+
     left_block  = TITLE_H + len(ordered) * stat_h + PAD
     right_block = TITLE_H + doll_h + crest_h + PAD
-    total_h = max(left_block, right_block) + PAD
-    total_w = PAD + left_w + PAD + doll_w + PAD
+    aug_block   = TITLE_H + aug_h + PAD
+    total_h = max(left_block, right_block, aug_block) + PAD
+    total_w = PAD + left_w + PAD + doll_w + (PAD + aug_w if augments else 0) + PAD
 
     img  = Image.new("RGB", (total_w, total_h), BG_DARK)
     draw = ImageDraw.Draw(img)
@@ -614,6 +663,28 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
                 except Exception:
                     pass
             draw.rectangle([cx, cyy, cx + cw, cyy + ch], outline=DIVIDER)
+
+    # ---- EQUIPPED AUGMENTS grid (right column, OW-Mod style) ----
+    if augments:
+        ax0 = PAD + left_w + PAD + doll_w + PAD
+        ay0 = TITLE_H + 4
+        draw.text((ax0, ay0), "EQUIPPED AUGMENTS", font=font_sec, fill=TEXT_HEADER)
+        ay0 += 28
+        gem = AUG_CELL - 4  # icon size within the cell
+        for idx, aug in enumerate(augments):
+            r, c = divmod(idx, aug_cols)
+            gx = ax0 + c * AUG_CELL
+            gy = ay0 + r * AUG_CELL
+            icon = item_icons.get(aug.get("img"))
+            if icon is not None:
+                try:
+                    ic = icon.convert("RGBA").resize((gem, gem))
+                    img.paste(ic, (gx, gy), ic)
+                    continue
+                except Exception:
+                    pass
+            # empty slot or missing icon → faint outlined box
+            draw.rectangle([gx, gy, gx + gem, gy + gem], outline=DIVIDER)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
