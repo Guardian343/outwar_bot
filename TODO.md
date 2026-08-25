@@ -362,11 +362,22 @@ summary) and to action commands (guard-start) — see Critical below.
   its colour. Command fetches profile.php?transnick=NAME (items ARE on that page — confirmed),
   dedups image URLs, downloads via bounded Semaphore(8) (rate-limit-safe), sends as a clean embed
   with image + "🔗 Open in Browser" title link (no raw URL / no preview unfurl). Allowlisted in auth.
-  ⚠️ STILL TO CHECK/TWEAK (live): item icons rendered STRETCHED/tall in the first live test
-  (GhostlyNem) because each item is resized to FILL its slot dims (some slots are tall rectangles).
-  POSSIBLE FIX: preserve aspect ratio (fit-within, not stretch-to-fill). Verify after underling
-  fix deploys — the stretch may have been exaggerated by the whole image being shrunk. Low-risk
-  tweak to render_profile_full if still needed.
+  ⚠️ REMAINING POLISH (cosmetic, Liam OK to defer — "works well enough" 2026-08-25):
+  Animated-GIF item icons: pick_item_frame() picks the BRIGHTEST frame to fix the "only
+  background glow showing" problem (animated glow GIFs whose frame 0 is the dim start of the fade).
+  This fixed MOST items, but SOME still don't show the full/ideal image — their best frame isn't
+  necessarily the brightest (glow peak can wash out detail, or the "full" look is mid-fade). FIX
+  LATER: refine the frame heuristic — try "most opaque pixels" or "last frame" instead of/alongside
+  "brightest", possibly per-item. Tuning job, not a rebuild. Also earlier note: some slots are tall
+  rectangles so items get stretched to fill — could preserve aspect ratio (fit-within). Both are
+  low-priority cosmetic tweaks to render_profile_full / pick_item_frame.
+  ✅ AUGMENTS DONE (2026-08-25): EQUIPPED AUGMENTS grid added as a 3rd column (OW-Mod style).
+  parse_item_augments() reads each item's item_rollover.php (structure confirmed from OWMod script:
+  item icon first, then augslot.jpg/itempopup(event,'ITEMID_SLOT') gems in slot order). Command
+  fetches one rollover per item (bounded Semaphore(6)), keeps filled augments, downloads gems
+  (deduped, bounded 8). Heaviest part of !profile now (~10 rollovers + up to ~50 gem dls) but
+  bounded/rate-limit-safe. FYI possible future add (deferred, ~50 extra fetches): "FROM AUGMENTS"
+  stat totals (Power/Chaos/Ele from augs) — OWMod computes by summing each augment's stat lines.
 
 - [ ] Event boss handling  [Medium] (observe first, 3-monthly) — should auto-handle via the
   live page; watch (1) drop summary completeness vs the fixed 15s wait (ties to loot-completion
