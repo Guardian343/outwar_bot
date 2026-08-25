@@ -121,13 +121,24 @@ summary) and to action commands (guard-start) — see Critical below.
   The 9am summary is Sigil-only. Make it post a Torax summary to torax-chat too. Depends on
   3c/3d so there's Torax boss/envoy data to summarise.
 
-- [ ] 📜 `parse_envoys` doesn't match envoy pages at all  [Hard] — surfaced 2026-08-10
-  `parse_envoys` returns 0 on ALL envoy pages — its selectors are built for the PRIMEGODS
-  layout, not envoy pages. The monitor's `envoys = parse_envoys(primegods_html)` was always
-  empty -> "Envoy parse returned nothing" every poll. The envoy feature does NOT need
-  parse_envoys — everything comes from the target pages (leaderboard/name/pool/countdown, all
-  built + tested). ACTION: rebuild envoy spawn-state detection on the target-page parsers;
-  treat old parse_envoys as dead code to remove or rewrite. (Ties into the Envoy feature and 3d.)
+- [~] 📜 `parse_envoys` — NEW parser built, but live monitor NOT yet rewired  [Medium]
+  UPDATE 2026-08-25: built parse_envoy_overview() from a REAL rollover dump — parses the current
+  card-based envoy_overview page (div.envoy-card → title/name/combat/rage/target/image). VERIFIED
+  on the real dump: all 8 envoys (Mob/spink2, PvP/BuggLordV1, Raid/MichaelJordan23, Alvar/NuBeRt,
+  Delruk/BuGGLord, Vordyn/PaasHaaS, PP-Hard/TurTleMasTer, PP-Easy/phillmitchell). !envoys command
+  REWIRED to fetch envoy_overview + use the new parser → works.
+  ⚠️ AUDIT FINDING (2026-08-25): the OLD broken parse_envoys is STILL CALLED in the LIVE MONITOR
+  in TWO places — god_monitor.py line ~361 (`_poll_gods_for`: envoys = parse_envoys(primegods_html))
+  and line ~1911 (cache = parse_envoys(html)). These still return nothing → the "Envoy parse
+  returned nothing" warnings persist for live tracking even though !envoys now works. So the envoy
+  fix is HALF DONE: command ✓, live monitor ✗.
+  WHY NOT REWIRED YET: line 361 fetches `primegods` for GODS and reuses that same fetch for envoys.
+  The new parser needs the `envoy_overview` page instead — so rewiring means a separate fetch per
+  poll (or restructuring the poll). More invasive, wants care + a live bot to watch. Deferred
+  deliberately, NOT forgotten. ACTION when tackled: point _poll_gods_for + line 1911 at
+  envoy_overview + parse_envoy_overview, and retire the old parse_envoys (now dead once those two
+  callers move). Ties into "3d Envoy poll per server".
+  DEAD CODE NOTE: old parse_envoys becomes fully dead once those 2 callers are migrated — remove then.
 
 - [ ] Verify background pot task vs raid session isolation  [Hard]
   Historically a cookie-jar race (`_cast_boss_pots_bg` switched `ow_userid` while `_do_boss_raid`
@@ -138,6 +149,19 @@ summary) and to action commands (guard-start) — see Critical below.
 ---
 
 ## 🧪 Test & Verify (confirm recent work before piling on more)
+
+- [ ] 🔍 CODE AUDIT findings (2026-08-25) — alignment / dead code to clean up  [Easy-Medium]
+  From a consolidation audit of the profile + envoy + boss-raid work:
+    • DEAD CODE: `parse_equipped_items()` in scraper.py — defined but NEVER called (superseded by
+      parse_equipment_paperdoll). Safe to remove. Harmless but dead weight.
+    • HALF-WIRED: envoy parser — !envoys uses the new parser, but the LIVE MONITOR still calls the
+      old broken parse_envoys in 2 spots (see the parse_envoys item above). Envoy fix is incomplete
+      until those are migrated.
+    • FINE (not a bug, leave alone): render_profile (stats-only) coexists with render_profile_full
+      — render_profile is the intentional FALLBACK when no items parse. Legit defensive design.
+    • FINE: two faction-totals blocks (render_caps_table + render_stats_table) — separate tables,
+      not duplication.
+  Nothing here is deploy-blocking; all cosmetic/tidiness except the half-wired envoy monitor.
 
 - [ ] Let dual-server god monitoring + trustee scan bake  [Test]
   Confirm over a good stretch (ideally overnight, like Sigil's 33h): Torax god alerts keep
@@ -328,13 +352,21 @@ summary) and to action commands (guard-start) — see Critical below.
   the bottom (e.g. "Alvar (78)", "Vordyn (46) Delruk (41) Alvar (25)"). Add faction-level totals to
   our !pcaps render. (Screenshot ref: Bloop !gcaps AOE / VALZEK / AGNAR.)
 
-- [ ] 👤 !profile <outwar name>  [Medium] — BUILD FROM SCRATCH. Bloop's !profile shows a rich
-  character card: level, class, crew, Experience, Power, Hit Points, Elemental Attack, Elemental
-  Resist, Chaos Damage, Growth Yesterday, Wilderness Level, God Slayer Level, Faction, Parent, the
-  profile picture, equipped items grid, and skill crests, plus an "Open in Browser" link. Liam
-  notes "shouldn't be too difficult." Needs: fetch + parse the profile page for a given name, render
-  a card (reuse the existing table/card image renderer). (Screenshot ref: Bloop !profile
-  beastofthestorms.)
+- [x] 👤 !profile <outwar name>  [DONE 2026-08-25 — pending deploy] — Bloop/OW-Mod-style card.
+  BUILT: parse_full_profile() (stats, with KNOWN_STATS allowlist so underlings/minions like
+  ELITE10/6NEMESIS6/MWAHA are dropped — they were flooding the card to ~1900px and Discord shrank
+  it; now ~788px), parse_equipment_paperdoll() (reads REAL left/top/width/height coords from the
+  profile.php equipment div so items render in their true paperdoll positions, not a grid; splits
+  multi-img cells like the 3 chaos orbs), parse_skill_crests(), render_profile_full() (2-col PLAYER
+  INFO left + coordinate-faithful EQUIPMENT paperdoll right + SKILL CRESTS row), faction shown in
+  its colour. Command fetches profile.php?transnick=NAME (items ARE on that page — confirmed),
+  dedups image URLs, downloads via bounded Semaphore(8) (rate-limit-safe), sends as a clean embed
+  with image + "🔗 Open in Browser" title link (no raw URL / no preview unfurl). Allowlisted in auth.
+  ⚠️ STILL TO CHECK/TWEAK (live): item icons rendered STRETCHED/tall in the first live test
+  (GhostlyNem) because each item is resized to FILL its slot dims (some slots are tall rectangles).
+  POSSIBLE FIX: preserve aspect ratio (fit-within, not stretch-to-fill). Verify after underling
+  fix deploys — the stretch may have been exaggerated by the whole image being shrunk. Low-risk
+  tweak to render_profile_full if still needed.
 
 - [ ] Event boss handling  [Medium] (observe first, 3-monthly) — should auto-handle via the
   live page; watch (1) drop summary completeness vs the fixed 15s wait (ties to loot-completion

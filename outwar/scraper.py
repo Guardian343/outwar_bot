@@ -351,7 +351,17 @@ def parse_full_profile(html: str) -> dict:
         if out["crew"]:
             break
 
-    # --- Every label/value row in the profile stats table(s) ---
+    # --- Profile stat rows — ONLY keep known profile stats. The profile page also
+    # lists a character's underlings/minions as label/value rows (ELITE10=76, etc.),
+    # which would otherwise flood the card and make the image huge (~1900px → Discord
+    # shrinks it). An allowlist of the real profile stats keeps just those and drops
+    # the underling rows entirely.
+    KNOWN_STATS = {
+        "character class", "total experience", "growth yesterday", "total power",
+        "attack", "elemental attack", "hit points", "chaos damage",
+        "elemental resist", "wilderness level", "god slayer level", "parent",
+        "faction", "experience", "power",  # a few aliases just in case
+    }
     for row in soup.find_all("tr"):
         cells = row.find_all("td")
         if len(cells) >= 2:
@@ -360,6 +370,8 @@ def parse_full_profile(html: str) -> dict:
             if not label or not value:
                 continue
             low = label.lower()
+            if low not in KNOWN_STATS:
+                continue  # skip underlings and anything not a recognised stat
             out["stats"][label] = value
             if low == "faction":
                 fm = re.match(r"(.+?)\s*\((\d+)\)", value)

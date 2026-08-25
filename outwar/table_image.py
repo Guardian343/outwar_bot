@@ -438,9 +438,10 @@ def render_profile(profile: dict) -> io.BytesIO:
 
     # Preferred display order (only shown if present); anything else appended after.
     preferred = [
-        "Experience", "Total Power", "Hit Points", "Elemental Attack",
-        "Elemental Resist", "Chaos Damage", "Growth Yesterday",
-        "Wilderness Level", "God Slayer Level", "Faction", "Parent",
+        "Character Class", "Total Experience", "Growth Yesterday",
+        "Total Power", "Attack", "Hit Points", "Chaos Damage",
+        "Elemental Attack", "Elemental Resist", "Wilderness Level",
+        "God Slayer Level", "Parent", "Faction",
     ]
     rows = []
     if crew:
@@ -503,9 +504,10 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
 
     # ---- Left column: 2-column stat block (like the real PLAYER INFO) ----
     preferred = [
-        "Experience", "Total Power", "Hit Points", "Elemental Attack",
-        "Elemental Resist", "Chaos Damage", "Growth Yesterday",
-        "Wilderness Level", "God Slayer Level", "Faction", "Parent",
+        "Character Class", "Total Experience", "Growth Yesterday",
+        "Total Power", "Attack", "Hit Points", "Chaos Damage",
+        "Elemental Attack", "Elemental Resist", "Wilderness Level",
+        "God Slayer Level", "Parent", "Faction",
     ]
     ordered = []
     if crew:

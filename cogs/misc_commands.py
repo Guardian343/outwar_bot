@@ -960,7 +960,15 @@ class GroupStatCommands(commands.Cog):
 
             url = f"{SIGIL}/profile?transnick={name}&serverid=1"
             await msg.delete()
-            await ctx.send(content=f"🔗 [Open in Browser]({url})",
+            # Clean Bloop-style presentation: the card image in an embed whose TITLE
+            # is the clickable "Open in Browser" link — no separate URL preview unfurl.
+            embed = discord.Embed(
+                title="🔗 Open in Browser",
+                url=url,
+                colour=discord.Colour.dark_theme(),
+            )
+            embed.set_image(url="attachment://profile.png")
+            await ctx.send(embed=embed,
                            file=discord.File(buf, filename="profile.png"))
         except Exception as e:
             logger.warning("MISC", f"[profile] error for {name}: {e}")
