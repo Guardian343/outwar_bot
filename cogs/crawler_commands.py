@@ -558,13 +558,18 @@ class CrawlerCommands(commands.Cog):
         try:
             raw = await self.session.get_as(f"ajax_changeroomb.php?room={room}&lastroom=0", suid)
             data = json.loads(raw)
-            details = data.get("roomDetailsNew", [])
-            if not details:
-                await ctx.send(f"No roomDetailsNew for room {room}. Top-level keys: `{list(data.keys())}`")
-                return
+            # Show the top-level SCALAR fields (name/description/pic/etc.) — this is
+            # where a room/zone name would live (e.g. 'name' for "Holy Dimension").
+            scalars = {k: v for k, v in data.items()
+                       if isinstance(v, (str, int, float, bool)) or v is None}
             import pprint
-            sample = pprint.pformat(details[:2], width=70)
-            await ctx.send(f"**Room {room} raw mob JSON** (first 2 mobs):\n```\n{sample[:1800]}\n```")
+            top = pprint.pformat(scalars, width=70)
+            details = data.get("roomDetailsNew", [])
+            msg = f"**Room {room} — top-level fields:**\n```\n{top[:900]}\n```"
+            if details:
+                sample = pprint.pformat(details[:1], width=70)
+                msg += f"\n**First mob:**\n```\n{sample[:700]}\n```"
+            await ctx.send(msg[:1900])
         except Exception as e:
             await ctx.send(f"Error: `{e}`")
 
