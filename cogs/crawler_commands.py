@@ -107,8 +107,33 @@ def parse_room_payload(raw: str):
         name = mob.get("name") or mob.get("mobName")
         if mid and name:
             try:
-                mobs.append({"id": int(mid), "name": name,
-                             "type": mob.get("type"), "raid": mob.get("type") == 1})
+                mtype = mob.get("type")
+                # Category detection (confirmed from real room JSON, 2026-08-26):
+                #   - RAID     → type == 1
+                #   - TALK/QUEST → has qmsg (quest message) or noAttack == True
+                #   - ATTACK   → everything else (type 2 attackable mobs)
+                # NOTE: type does NOT separate attack vs talk (both are type 2) — the
+                # qmsg/noAttack flags are what distinguish a quest/talk mob.
+                is_raid = (mtype == 1)
+                is_quest = bool(mob.get("qmsg")) or mob.get("noAttack") is True
+                if is_raid:
+                    category = "raid"
+                elif is_quest:
+                    category = "talk"
+                else:
+                    category = "attack"
+                entry = {
+                    "id": int(mid), "name": name, "type": mtype,
+                    "raid": is_raid, "category": category,
+                }
+                # Capture useful extras when present (level/rage aid raid-targeting).
+                if mob.get("level") is not None:
+                    try: entry["level"] = int(mob["level"])
+                    except (ValueError, TypeError): pass
+                if mob.get("rage") is not None:
+                    try: entry["rage"] = int(mob["rage"])
+                    except (ValueError, TypeError): pass
+                mobs.append(entry)
             except (ValueError, TypeError):
                 pass
     return {"actual_room": actual_room, "exits": connected, "mobs": mobs,
@@ -231,6 +256,9 @@ class CrawlerCommands(commands.Cog):
                     if key not in crawl_mobs:
                         crawl_mobs[key] = {"id": m["id"], "name": m["name"],
                                            "type": m["type"], "raid": m["raid"],
+                                           "category": m.get("category"),
+                                           "level": m.get("level"),
+                                           "rage": m.get("rage"),
                                            "rooms": [rid]}
                         new_mobs += 1
                         self._stats["new_mobs"] = new_mobs
@@ -493,8 +521,9 @@ class CrawlerCommands(commands.Cog):
         got = sorted(parsed["exits"])
         arrived = parsed["actual_room"] == room
         arrived_str = "✅ yes" if arrived else f"❌ no (landed in {parsed['actual_room']} — likely key-locked)"
-        mob_lines = [f"  • {m['id']} — {m['name']}  [type={m.get('type')}]"
-                     + (" (raid)" if m["raid"] else "")
+        mob_lines = [f"  • {m['id']} — {m['name']}  [{m.get('category','?')}"
+                     + (f" L{m['level']}" if m.get('level') else "")
+                     + (f" {m['rage']}r" if m.get('rage') else "") + "]"
                      for m in parsed["mobs"][:15]]
         match = "✅ exits match map" if got and set(got) == set(known) else (
                 "⚠️ exits differ from map" if got else "❌ no exits parsed")
