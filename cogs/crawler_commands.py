@@ -25,6 +25,7 @@ MAP_SEED  = os.path.join(os.path.dirname(__file__), "..", "outwar", "map_graph.j
 MAP_PATH  = os.path.join(os.path.dirname(__file__), "..", "database", "map_graph.json")
 MOBS_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "crawl_mobs.json")
 LOCKED_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "locked_rooms.json")
+ZONES_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "room_zones.json")
 
 # Rate limit — requests per second
 CRAWL_DELAY    = 0.3   # seconds between moves
@@ -137,6 +138,7 @@ def parse_room_payload(raw: str):
             except (ValueError, TypeError):
                 pass
     return {"actual_room": actual_room, "exits": connected, "mobs": mobs,
+            "zone": (data.get("name") or "").strip() or None,
             "raw_keys": list(data.keys())}
 
 
@@ -248,9 +250,13 @@ class CrawlerCommands(commands.Cog):
             # lock, which is exactly why merging across differently-keyed accounts
             # (below, in _save) builds the full picture.
             locked_rooms = {}
+            room_zones = {}   # room_id(str) → zone name (e.g. "Holy Dimension")
 
             def _record(parsed, rid):
                 nonlocal new_mobs
+                zone = parsed.get("zone")
+                if zone:
+                    room_zones[str(rid)] = zone   # room → zone name (e.g. "Holy Dimension")
                 for m in parsed["mobs"]:
                     key = str(m["id"])
                     if key not in crawl_mobs:
@@ -259,11 +265,16 @@ class CrawlerCommands(commands.Cog):
                                            "category": m.get("category"),
                                            "level": m.get("level"),
                                            "rage": m.get("rage"),
+                                           "zone": zone,
                                            "rooms": [rid]}
                         new_mobs += 1
                         self._stats["new_mobs"] = new_mobs
-                    elif rid not in crawl_mobs[key]["rooms"]:
-                        crawl_mobs[key]["rooms"].append(rid)
+                    else:
+                        if rid not in crawl_mobs[key]["rooms"]:
+                            crawl_mobs[key]["rooms"].append(rid)
+                        # backfill zone if we didn't have it before
+                        if zone and not crawl_mobs[key].get("zone"):
+                            crawl_mobs[key]["zone"] = zone
                 # keep map connectivity fresh from the live exits
                 for dest in parsed["exits"]:
                     if dest not in map_graph.setdefault(rid, []):
@@ -356,10 +367,10 @@ class CrawlerCommands(commands.Cog):
                         f"\U0001F5FA\uFE0F **Crawl progress** \u2014 {len(visited):,} rooms visited \u00b7 "
                         f"{new_rooms:,} new rooms \u00b7 {new_mobs:,} new mobs \u00b7 "
                         f"depth {len(stack)} \u00b7 {self._stats['locked']} locked")
-                    self._save(map_graph, crawl_mobs, locked_rooms, char_name)
+                    self._save(map_graph, crawl_mobs, locked_rooms, char_name, room_zones)
 
             # Final save
-            self._save(map_graph, crawl_mobs, locked_rooms, char_name)
+            self._save(map_graph, crawl_mobs, locked_rooms, char_name, room_zones)
 
             elapsed = int((datetime.now() - self._stats["started"]).total_seconds())
             mins, secs = divmod(elapsed, 60)
@@ -386,13 +397,28 @@ class CrawlerCommands(commands.Cog):
             self._crawling = False
 
     def _save(self, map_graph: dict, crawl_mobs: dict, locked_rooms: dict = None,
-              char_name: str = None):
+              char_name: str = None, room_zones: dict = None):
         """Save map graph and mob data to disk (database/, which survives deploys)."""
         os.makedirs(os.path.dirname(MAP_PATH), exist_ok=True)
         with open(MAP_PATH, "w") as f:
             json.dump({str(k): v for k, v in map_graph.items()}, f)
         with open(MOBS_PATH, "w") as f:
             json.dump(crawl_mobs, f, indent=2)
+
+        # ---- Room → zone name: MERGE across crawls, only ever grow ----
+        # The zone name (e.g. "Holy Dimension") comes free in the room JSON ('name'),
+        # so we record room → zone. Merge so partial crawls accumulate coverage.
+        if room_zones:
+            zmerged = {}
+            try:
+                if os.path.exists(ZONES_PATH):
+                    with open(ZONES_PATH) as f:
+                        zmerged = json.load(f)
+            except Exception:
+                zmerged = {}
+            zmerged.update({str(k): v for k, v in room_zones.items() if v})
+            with open(ZONES_PATH, "w") as f:
+                json.dump(zmerged, f, indent=2)
 
         # ---- Locked-room knowledge: MERGE across crawls, only ever GROW ----
         # Key facts about the world (room → required key) are learned from whichever
@@ -528,7 +554,8 @@ class CrawlerCommands(commands.Cog):
         match = "✅ exits match map" if got and set(got) == set(known) else (
                 "⚠️ exits differ from map" if got else "❌ no exits parsed")
         msg = (
-            f"🔎 **Room {room}** as **{trustee['name']}**\n"
+            f"🔎 **Room {room}** as **{trustee['name']}**"
+            + (f"  ·  🗺️ {parsed.get('zone')}" if parsed.get("zone") else "") + "\n"
             f"Arrived: {arrived_str}\n"
             f"Exits parsed: **{len(got)}** {got[:12]}\n"
             f"Map says: **{len(known)}** {known[:12]}  →  {match}\n"
@@ -572,6 +599,31 @@ class CrawlerCommands(commands.Cog):
             await ctx.send(msg[:1900])
         except Exception as e:
             await ctx.send(f"Error: `{e}`")
+
+    @commands.command(name="zones")
+    async def zones_cmd(self, ctx):
+        """Show zones discovered by the crawl and how many rooms each contains."""
+        try:
+            with open(ZONES_PATH) as f:
+                zones = json.load(f)
+        except Exception:
+            zones = {}
+        if not zones:
+            await ctx.send("No zones recorded yet. Run a crawl with the zone-capture update.")
+            return
+        counts = {}
+        for rid, zname in zones.items():
+            counts[zname] = counts.get(zname, 0) + 1
+        lines = [f"🗺️ **Zones** ({len(counts)} zones, {len(zones)} rooms mapped)"]
+        for z in sorted(counts, key=lambda x: -counts[x]):
+            lines.append(f"**{z}**: {counts[z]} rooms")
+        buf = ""
+        for line in lines:
+            if len(buf) + len(line) + 1 > 1900:
+                await ctx.send(buf); buf = ""
+            buf += line + "\n"
+        if buf:
+            await ctx.send(buf)
 
     @commands.command(name="crawl-stop")
     async def crawl_stop(self, ctx):
