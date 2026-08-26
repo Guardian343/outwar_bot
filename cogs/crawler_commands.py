@@ -625,6 +625,121 @@ class CrawlerCommands(commands.Cog):
         if buf:
             await ctx.send(buf)
 
+    @commands.command(name="find")
+    async def find_cmd(self, ctx, *, query: str = ""):
+        """
+        Look up mobs, raids, quest-givers, or a room in the crawl database.
+          !find <room number>   → everything in that room (zone + all mobs by category)
+          !find <name>          → that mob's locations, grouped by zone (name = "contains")
+          !find <name>*         → starts-with wildcard
+          !find "exact name"    → exact match only
+        Name search covers attackable mobs, raid mobs, AND quest-givers (talkable).
+        """
+        query = query.strip()
+        if not query:
+            await ctx.send("Usage: `!find <room#>` or `!find <mob name>` "
+                           "(add `*` for starts-with, or quote for exact).")
+            return
+
+        try:
+            with open(MOBS_PATH) as f:
+                mobs = json.load(f)
+        except Exception:
+            await ctx.send("No crawl data yet — run a crawl first.")
+            return
+        try:
+            with open(ZONES_PATH) as f:
+                room_zones = json.load(f)
+        except Exception:
+            room_zones = {}
+
+        def zone_of(rid):
+            return room_zones.get(str(rid)) or "Unknown Area"
+
+        def group_rooms_by_zone(rooms):
+            grouped = {}
+            for rid in rooms:
+                grouped.setdefault(zone_of(rid), []).append(rid)
+            return grouped
+
+        # ---- ROOM lookup: all digits ----
+        if query.isdigit():
+            rid = int(query)
+            here = [m for m in mobs.values() if rid in m.get("rooms", [])]
+            zname = zone_of(rid)
+            if not here:
+                await ctx.send(f"🔎 **Room {rid}** ({zname}) — no mobs recorded here.")
+                return
+            cats = {"raid": [], "attack": [], "talk": []}
+            for m in here:
+                cats.get(m.get("category") or "attack", cats["attack"]).append(m)
+            lines = [f"🔎 **Room {rid}**  ·  🗺️ {zname}"]
+            labels = [("raid", "🐉 Raids"), ("attack", "⚔️ Attackable"), ("talk", "📜 Quest-givers")]
+            for key, label in labels:
+                if cats[key]:
+                    lines.append(f"\n**{label}:**")
+                    for m in cats[key]:
+                        lvl = f" L{m['level']}" if m.get("level") else ""
+                        lines.append(f"  • {m['name']}{lvl}")
+            await self._send_chunked(ctx, "\n".join(lines))
+            return
+
+        # ---- NAME lookup: exact (quoted), starts-with (trailing *), or contains ----
+        exact = query.startswith('"') and query.endswith('"')
+        needle = query.strip('"').lower()
+        starts = needle.endswith("*")
+        needle_clean = needle.rstrip("*").strip()
+
+        def matches(name):
+            n = name.lower()
+            if exact:
+                return n == needle_clean
+            if starts:
+                return n.startswith(needle_clean)
+            return needle_clean in n
+
+        hits = [m for m in mobs.values() if matches(m.get("name", ""))]
+        if not hits:
+            await ctx.send(f"🔎 No mob/raid/quest-giver matching `{query}` found.")
+            return
+
+        # One hit → full zone/room breakdown. Many → compact name+count list.
+        if len(hits) == 1:
+            await self._send_chunked(ctx, self._format_mob_locations(hits[0], group_rooms_by_zone))
+        else:
+            lines = [f"🔎 **{len(hits)} matches for `{query}`:**"]
+            for m in sorted(hits, key=lambda x: x.get("name", "")):
+                cat = m.get("category") or "?"
+                icon = {"raid": "🐉", "attack": "⚔️", "talk": "📜"}.get(cat, "•")
+                nrooms = len(m.get("rooms", []))
+                lines.append(f"  {icon} {m['name']} — {nrooms} room(s)")
+            lines.append("\nUse `!find \"exact name\"` to see one mob's rooms by zone.")
+            await self._send_chunked(ctx, "\n".join(lines))
+
+    def _format_mob_locations(self, mob, group_fn):
+        """Render 'Mob X is in: <Zone>: Room #,#' grouped by zone (multi-zone aware)."""
+        cat = mob.get("category") or "?"
+        icon = {"raid": "🐉", "attack": "⚔️", "talk": "📜"}.get(cat, "•")
+        lvl = f" (L{mob['level']})" if mob.get("level") else ""
+        grouped = group_fn(mob.get("rooms", []))
+        lines = [f"{icon} **{mob['name']}**{lvl} is in:"]
+        for zone in sorted(grouped):
+            rooms = ", ".join(str(r) for r in sorted(grouped[zone]))
+            lines.append(f"**{zone}:**")
+            lines.append(f"Room {rooms}")
+        return "\n".join(lines)
+
+    async def _send_chunked(self, ctx, msg):
+        """Send a long message split on line boundaries (Discord 2000-char cap)."""
+        buf = ""
+        for line in msg.split("\n"):
+            if len(buf) + len(line) + 1 > 1900:
+                await ctx.send(buf)
+                buf = ""
+            buf += line + "\n"
+        if buf.strip():
+            await ctx.send(buf)
+
     @commands.command(name="crawl-stop")
     async def crawl_stop(self, ctx):
         """Stop the currently running crawl."""
