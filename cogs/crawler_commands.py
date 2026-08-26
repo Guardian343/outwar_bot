@@ -493,7 +493,8 @@ class CrawlerCommands(commands.Cog):
         got = sorted(parsed["exits"])
         arrived = parsed["actual_room"] == room
         arrived_str = "✅ yes" if arrived else f"❌ no (landed in {parsed['actual_room']} — likely key-locked)"
-        mob_lines = [f"  • {m['id']} — {m['name']}" + (" (raid)" if m["raid"] else "")
+        mob_lines = [f"  • {m['id']} — {m['name']}  [type={m.get('type')}]"
+                     + (" (raid)" if m["raid"] else "")
                      for m in parsed["mobs"][:15]]
         match = "✅ exits match map" if got and set(got) == set(known) else (
                 "⚠️ exits differ from map" if got else "❌ no exits parsed")
@@ -506,7 +507,37 @@ class CrawlerCommands(commands.Cog):
         )
         if not parsed["exits"]:
             msg += f"\n\n⚠️ Exits empty — response keys were: `{parsed['raw_keys']}` (tells me the right exits key)."
+        else:
+            # Always surface the JSON keys — tells us if a zone/room-name field is present.
+            msg += f"\n\n🔑 JSON keys: `{parsed['raw_keys']}`"
         await ctx.send(msg[:1900])
+
+    @commands.command(name="crawl-raw")
+    async def crawl_raw(self, ctx, character: str, room: int):
+        """
+        Dump the RAW mob JSON for one room — reveals the exact fields available on
+        each mob (type, icon, category, etc.) so we can map attackable/talkable/raid.
+        Usage: !crawl-raw <char> <room>
+        """
+        from outwar import database as db
+        trustees = db.get_trustees()
+        trustee = next((t for t in trustees if t["name"].lower() == character.lower()), None)
+        if not trustee or not trustee.get("suid"):
+            await ctx.send(f"`{character}` not found in trustees or has no SUID.")
+            return
+        suid = trustee["suid"]
+        try:
+            raw = await self.session.get_as(f"ajax_changeroomb.php?room={room}&lastroom=0", suid)
+            data = json.loads(raw)
+            details = data.get("roomDetailsNew", [])
+            if not details:
+                await ctx.send(f"No roomDetailsNew for room {room}. Top-level keys: `{list(data.keys())}`")
+                return
+            import pprint
+            sample = pprint.pformat(details[:2], width=70)
+            await ctx.send(f"**Room {room} raw mob JSON** (first 2 mobs):\n```\n{sample[:1800]}\n```")
+        except Exception as e:
+            await ctx.send(f"Error: `{e}`")
 
     @commands.command(name="crawl-stop")
     async def crawl_stop(self, ctx):
