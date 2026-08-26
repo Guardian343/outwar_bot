@@ -272,9 +272,21 @@ class CrawlerCommands(commands.Cog):
                     else:
                         if rid not in crawl_mobs[key]["rooms"]:
                             crawl_mobs[key]["rooms"].append(rid)
-                        # backfill zone if we didn't have it before
-                        if zone and not crawl_mobs[key].get("zone"):
-                            crawl_mobs[key]["zone"] = zone
+                        # Backfill/refresh enrichment fields on re-visit so that a
+                        # crawl with newer code upgrades OLD records (which may lack
+                        # category/level/rage/zone) instead of leaving them stale.
+                        rec = crawl_mobs[key]
+                        if zone and not rec.get("zone"):
+                            rec["zone"] = zone
+                        if m.get("category") and not rec.get("category"):
+                            rec["category"] = m["category"]
+                        if m.get("level") and not rec.get("level"):
+                            rec["level"] = m["level"]
+                        if m.get("rage") and not rec.get("rage"):
+                            rec["rage"] = m["rage"]
+                        # Ensure raid flag reflects the (now-known) category.
+                        if m.get("category") == "raid":
+                            rec["raid"] = True
                 # keep map connectivity fresh from the live exits
                 for dest in parsed["exits"]:
                     if dest not in map_graph.setdefault(rid, []):
