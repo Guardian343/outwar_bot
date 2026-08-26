@@ -33,21 +33,39 @@ PROGRESS_EVERY = 100   # post update every N rooms
 
 def parse_locked_room(raw: str):
     """
-    Detect a key-locked room response and extract the required key/item name.
-    Trying to enter a locked room returns an HTML swal2 pop-up like:
-      <h2 class="swal2-title">To enter this room you must be carrying Text of
-      Echoes. <p>Head <a ...>back to last room</a></p>...</h2>
-    (HTML, not the JSON a normal room move returns — that's the signal it's locked.)
-    The key name sits right after "must be carrying" and before the "." / next tag.
-    Returns the required key name (str), or None if not a locked-room response.
+    Detect a key-locked room response and extract the required key/item/effect name.
+    Trying to enter a locked room returns an HTML swal2 pop-up. Known phrasings:
+      - "To enter this room you must be carrying <KEY>."          (carried item)
+      - "You must have <EFFECT> cast on you to enter this room."  (active effect/disguise)
+      - "...you must have <X> to enter..."                         (generic fallback)
+    Returns the required key/effect name (str), or None if it's not a recognised
+    lock message (so callers can treat a no-match as a transient failure, NOT a lock).
     """
     if not raw:
         return None
-    m = re.search(r"must be carrying\s+(.+?)\s*[.<]", raw, re.IGNORECASE)
-    if m:
-        key = re.sub(r"<[^>]+>", "", m.group(1)).strip()  # strip any stray tags
-        return key or None
+    patterns = [
+        r"must be carrying\s+(.+?)\s*[.<]",            # carried item
+        r"must have\s+(.+?)\s+cast on you",            # active effect / disguise
+        r"must have\s+(.+?)\s+to enter",               # generic "must have X to enter"
+        r"you must have\s+(.+?)\s*[.<]",               # generic fallback
+    ]
+    for pat in patterns:
+        m = re.search(pat, raw, re.IGNORECASE)
+        if m:
+            key = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+            if key:
+                return key
     return None
+
+
+def _is_locked_response(raw: str) -> bool:
+    """True if the response looks like a genuine lock pop-up (so we can distinguish a
+    real lock from a transient bounce even when the specific key phrasing isn't parsed)."""
+    if not raw:
+        return False
+    low = raw.lower()
+    return ("to enter this room" in low) or ("must be carrying" in low) or \
+           ("must have" in low and "to enter" in low)
 
 
 def parse_room_payload(raw: str):
@@ -275,24 +293,28 @@ class CrawlerCommands(commands.Cog):
                     continue
 
                 if parsed is None:
-                    # A failed JSON parse is usually the key-locked HTML swal2 pop-up
-                    # ("must be carrying <KEY>"). Capture it as a locked room (with the
-                    # key), so routing later knows this room is key-gated and which key.
-                    key = parse_locked_room(raw)
-                    if key:
+                    # A failed JSON parse is usually the key-locked HTML swal2 pop-up.
+                    # Record as locked ONLY if it actually looks like a lock message —
+                    # otherwise it's a transient failure (network blip / redirect) and
+                    # must NOT be recorded as a permanent lock (that produced false
+                    # positives like room 37879, which is actually freely enterable).
+                    if _is_locked_response(raw):
+                        key = parse_locked_room(raw)  # may be None if phrasing is new
                         locked_rooms[nxt] = {"key": key, "from": current}
                         self._stats["locked"] += 1
                     else:
                         self._stats["errors"] += 1
                     continue
                 if parsed["actual_room"] != nxt:
-                    # Entered elsewhere than intended — also key-locked/restricted.
-                    key = parse_locked_room(raw)
-                    if key:
+                    # Bounced to a different room than intended. Only treat as LOCKED if
+                    # the response is genuinely a lock pop-up; an unconfirmed bounce with
+                    # no lock message is a transient issue → error, not a false lock.
+                    if _is_locked_response(raw):
+                        key = parse_locked_room(raw)
                         locked_rooms[nxt] = {"key": key, "from": current}
+                        self._stats["locked"] += 1
                     else:
-                        locked_rooms.setdefault(nxt, {"key": None, "from": current})
-                    self._stats["locked"] += 1
+                        self._stats["errors"] += 1
                     continue
 
                 if nxt not in original_rooms:
@@ -407,9 +429,46 @@ class CrawlerCommands(commands.Cog):
         for k in sorted(by_key):
             rooms = ", ".join(sorted(by_key[k], key=lambda x: int(x)))
             lines.append(f"**{k}**: {rooms}")
-        msg = "\n".join(lines)
-        for i in range(0, len(msg), 1900):
-            await ctx.send(msg[i:i+1900])
+        # Chunk on LINE boundaries (never split a room number mid-way like the old
+        # fixed-width slice did).
+        buf = ""
+        for line in lines:
+            if len(buf) + len(line) + 1 > 1900:
+                await ctx.send(buf)
+                buf = ""
+            buf += (line + "\n")
+        if buf:
+            await ctx.send(buf)
+
+    @commands.command(name="locked-clean")
+    async def locked_clean_cmd(self, ctx, *room_ids):
+        """
+        Remove specific rooms from the locked list (false positives), or clear all
+        'Unknown key' entries. Usage:
+          !locked-clean 37879 39241        → remove those specific rooms
+          !locked-clean unknown            → remove ALL 'Unknown key' entries (the old
+                                             false positives; genuine unknown-format
+                                             locks will re-populate on the next crawl)
+        """
+        try:
+            with open(LOCKED_PATH) as f:
+                locked = json.load(f)
+        except Exception:
+            await ctx.send("No locked-rooms file to clean.")
+            return
+        before = len(locked)
+        if len(room_ids) == 1 and room_ids[0].lower() == "unknown":
+            locked = {r: v for r, v in locked.items() if v.get("key")}
+            removed = before - len(locked)
+            note = "all 'Unknown key' entries"
+        else:
+            for rid in room_ids:
+                locked.pop(str(rid), None)
+            removed = before - len(locked)
+            note = f"{removed} specified room(s)"
+        with open(LOCKED_PATH, "w") as f:
+            json.dump(locked, f, indent=2)
+        await ctx.send(f"🧹 Removed {note}. Locked rooms: {before} → {len(locked)}.")
 
     @commands.command(name="crawl-test")
     async def crawl_test(self, ctx, character: str, room: int):
