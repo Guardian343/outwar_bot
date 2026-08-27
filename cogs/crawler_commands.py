@@ -32,6 +32,24 @@ CRAWL_DELAY    = 0.3   # seconds between moves
 PROGRESS_EVERY = 100   # post update every N rooms
 
 
+def _add_wrapped_field(embed, name, lines, inline=False):
+    """Add lines to an embed field, splitting into continuation fields when the
+    1024-char Discord field cap would be exceeded. Never splits a line mid-way."""
+    buf = ""
+    first = True
+    for line in lines:
+        add = (line + "\n")
+        if len(buf) + len(add) > 1024:
+            embed.add_field(name=(name if first else f"{name} (cont.)"),
+                            value=buf.rstrip("\n") or "\u200b", inline=inline)
+            first = False
+            buf = ""
+        buf += add
+    if buf.strip():
+        embed.add_field(name=(name if first else f"{name} (cont.)"),
+                        value=buf.rstrip("\n"), inline=inline)
+
+
 def parse_locked_room(raw: str):
     """
     Detect a key-locked room response and extract the required key/item/effect name.
@@ -699,6 +717,133 @@ class CrawlerCommands(commands.Cog):
             buf += line + "\n"
         if buf:
             await ctx.send(buf)
+
+    @commands.command(name="zone")
+    async def zone_cmd(self, ctx, *, name: str = ""):
+        """
+        Deep-dive a single zone: rooms mapped, raids, quest-givers, top mobs by level,
+        and how many rooms are key-locked (and behind which keys).
+          !zone holy          → fuzzy match on zone name (contains, case-insensitive)
+          !zone "Holy Dimension"  → exact match
+        Reads only the crawl database — no live calls.
+        """
+        import discord
+        name = name.strip()
+        if not name:
+            await ctx.send("Usage: `!zone <name>` (e.g. `!zone holy`). "
+                           "Run `!zones` to list all mapped zones.")
+            return
+
+        try:
+            with open(ZONES_PATH) as f:
+                room_zones = json.load(f)   # {room_id_str: zone_name}
+        except Exception:
+            room_zones = {}
+        if not room_zones:
+            await ctx.send("No zones recorded yet — run a crawl with zone capture first.")
+            return
+        try:
+            with open(MOBS_PATH) as f:
+                mobs = json.load(f)
+        except Exception:
+            mobs = {}
+        try:
+            with open(LOCKED_PATH) as f:
+                locked = json.load(f)       # {room_id_str: {"key":..., "from":...}}
+        except Exception:
+            locked = {}
+
+        # ---- Resolve the zone name (exact if quoted, else contains) ----
+        all_zone_names = sorted(set(room_zones.values()))
+        exact = name.startswith('"') and name.endswith('"')
+        needle = name.strip('"').lower()
+        if exact:
+            candidates = [z for z in all_zone_names if z.lower() == needle]
+        else:
+            candidates = [z for z in all_zone_names if needle in z.lower()]
+
+        if not candidates:
+            await ctx.send(f"🔎 No zone matching `{name}`. Run `!zones` to see mapped zones.")
+            return
+        if len(candidates) > 1:
+            listing = ", ".join(f"`{z}`" for z in candidates[:15])
+            more = "" if len(candidates) <= 15 else f" (+{len(candidates)-15} more)"
+            await ctx.send(f"🔎 `{name}` matches {len(candidates)} zones: {listing}{more}\n"
+                           f"Be more specific or quote the exact name.")
+            return
+
+        zone = candidates[0]
+
+        # ---- Gather this zone's rooms and mobs ----
+        zone_rooms = {int(rid) for rid, z in room_zones.items() if z == zone}
+        raids, attackers, talkers = [], [], []
+        for m in mobs.values():
+            if m.get("zone") != zone:
+                continue
+            cat = m.get("category") or "attack"
+            if cat == "raid":
+                raids.append(m)
+            elif cat == "talk":
+                talkers.append(m)
+            else:
+                attackers.append(m)
+
+        # Rooms in THIS zone that are key-locked, tallied by key.
+        locked_here = {int(rid): info for rid, info in locked.items()
+                       if int(rid) in zone_rooms}
+        lock_by_key = {}
+        for info in locked_here.values():
+            k = info.get("key") or "Unknown key"
+            lock_by_key[k] = lock_by_key.get(k, 0) + 1
+
+        def lvl(m):
+            return m.get("level") or 0
+
+        embed = discord.Embed(title=f"🗺️  {zone}", color=discord.Color.teal())
+
+        # Overview line — rooms mapped + mob tallies + lock coverage.
+        overview = (f"**{len(zone_rooms):,}** rooms mapped  ·  "
+                    f"🐉 {len(raids)} raids  ·  ⚔️ {len(attackers)} mobs  ·  "
+                    f"📜 {len(talkers)} quest-givers")
+        embed.description = overview
+
+        # Raids — the headline content, show every one with level + room.
+        if raids:
+            rlines = []
+            for m in sorted(raids, key=lvl, reverse=True):
+                room_list = m.get("rooms") or []
+                rooms = ", ".join(str(r) for r in sorted(room_list))
+                l = f" (L{m['level']})" if m.get("level") else ""
+                rlines.append(f"🐉 **{m['name']}**{l} — room {rooms}")
+            _add_wrapped_field(embed, "Raids", rlines)
+
+        # Top attackable mobs by level (cap the list so the card stays readable).
+        if attackers:
+            top = sorted(attackers, key=lvl, reverse=True)[:12]
+            alines = []
+            for m in top:
+                l = f"L{m['level']}" if m.get("level") else "L?"
+                r = f"{m.get('rage'):,}r" if m.get("rage") else ""
+                alines.append(f"⚔️ {m['name']} — {l}{('  ·  ' + r) if r else ''}")
+            title = "Top mobs by level" if len(attackers) > 12 else "Attackable mobs"
+            _add_wrapped_field(embed, title, alines)
+
+        # Quest-givers (names only — usually plentiful).
+        if talkers:
+            names = ", ".join(sorted(m["name"] for m in talkers))
+            _add_wrapped_field(embed, f"Quest-givers ({len(talkers)})", [names])
+
+        # Lock coverage — the honest bit: what's gated in this zone and behind which key.
+        if lock_by_key:
+            llines = [f"🔒 {n} room(s) — **{k}**" for k, n in
+                      sorted(lock_by_key.items(), key=lambda kv: -kv[1])]
+            _add_wrapped_field(embed, f"Locked rooms ({len(locked_here)})", llines)
+            embed.set_footer(text="Locked rooms are walls this crawl account hit — "
+                                  "another account with the key may map further.")
+        else:
+            embed.set_footer(text="No key-locked rooms recorded in this zone.")
+
+        await ctx.send(embed=embed)
 
     @commands.command(name="find")
     async def find_cmd(self, ctx, *, query: str = ""):
