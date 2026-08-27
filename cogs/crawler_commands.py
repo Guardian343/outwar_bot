@@ -197,12 +197,57 @@ class CrawlerCommands(commands.Cog):
 
         where = "current room" if start.lower() == "here" else f"room {start}"
         await ctx.send(
-            f"🗺️ Starting world crawl as **{trustee['name']}**...\n"
-            f"Start point: {where}. Updates every {PROGRESS_EVERY} rooms.\n"
-            f"Use `!crawl-stop` to stop at any time."
+            f"🗺️ Starting world crawl as **{trustee['name']}** from {where}. "
+            f"Live progress below — use `!crawl-stop` to stop at any time."
         )
 
         asyncio.create_task(self._run_crawl(ctx, suid, trustee["name"], start))
+
+    def _build_progress_embed(self, char_name, visited, new_rooms, new_mobs,
+                              counters, elapsed_str, done=False, stopped=False):
+        """Build the live crawl embed. Shows total (accumulated in the DB) with the
+        new-this-run count in parentheses, so a re-crawl of an already-mapped world
+        still visibly ticks along instead of looking stuck on zeros."""
+        import discord
+        # Totals from the accumulated database.
+        try:
+            with open(MOBS_PATH) as f:
+                all_mobs = json.load(f)
+        except Exception:
+            all_mobs = {}
+        try:
+            with open(ZONES_PATH) as f:
+                all_zones = json.load(f)
+        except Exception:
+            all_zones = {}
+        total_mobs = len(all_mobs)
+        total_zones = len(set(all_zones.values())) if all_zones else 0
+        total_npcs = sum(1 for m in all_mobs.values() if m.get("category") == "talk")
+        total_raids = sum(1 for m in all_mobs.values() if m.get("category") == "raid")
+        total_rooms = len(set(all_zones.keys())) if all_zones else visited
+
+        if done:
+            title = f"✅ Crawl complete with {char_name}" if not stopped \
+                else f"⏹️ Crawl stopped with {char_name}"
+            colour = discord.Color.green() if not stopped else discord.Color.orange()
+        else:
+            title = f"🗺️ Crawling with {char_name}"
+            colour = discord.Color.blurple()
+
+        embed = discord.Embed(title=title, color=colour)
+
+        def line(total, new):
+            return f"**{total:,}**" + (f"  (+{new:,})" if new else "")
+
+        embed.add_field(name="Rooms explored", value=f"**{visited:,}**", inline=True)
+        embed.add_field(name="New rooms", value=f"**{new_rooms:,}**", inline=True)
+        embed.add_field(name="Zones", value=line(total_zones, counters["new_zones"]), inline=True)
+        embed.add_field(name="Mobs", value=line(total_mobs, new_mobs), inline=True)
+        embed.add_field(name="NPCs (talkable)", value=line(total_npcs, counters["new_npcs"]), inline=True)
+        embed.add_field(name="Raids", value=line(total_raids, counters["new_raids"]), inline=True)
+        footer = f"Locked/skipped: {self._stats['locked']} · Errors: {self._stats['errors']} · {elapsed_str}"
+        embed.set_footer(text=footer)
+        return embed
 
     async def _run_crawl(self, ctx, suid: int, char_name: str, start: str = "11"):
         try:
@@ -251,11 +296,18 @@ class CrawlerCommands(commands.Cog):
             # (below, in _save) builds the full picture.
             locked_rooms = {}
             room_zones = {}   # room_id(str) → zone name (e.g. "Holy Dimension")
+            # Discovery counters for the live embed. "new" = discovered THIS run;
+            # totals are read from the accumulated database at render time.
+            seen_zones = set()
+            counters = {"new_zones": 0, "new_npcs": 0, "new_raids": 0}
 
             def _record(parsed, rid):
                 nonlocal new_mobs
                 zone = parsed.get("zone")
                 if zone:
+                    if zone not in seen_zones:
+                        seen_zones.add(zone)
+                        counters["new_zones"] += 1
                     room_zones[str(rid)] = zone   # room → zone name (e.g. "Holy Dimension")
                 for m in parsed["mobs"]:
                     key = str(m["id"])
@@ -269,6 +321,12 @@ class CrawlerCommands(commands.Cog):
                                            "rooms": [rid]}
                         new_mobs += 1
                         self._stats["new_mobs"] = new_mobs
+                        # Tally the new mob by category for the embed.
+                        cat = m.get("category")
+                        if cat == "raid":
+                            counters["new_raids"] += 1
+                        elif cat == "talk":
+                            counters["new_npcs"] += 1
                     else:
                         if rid not in crawl_mobs[key]["rooms"]:
                             crawl_mobs[key]["rooms"].append(rid)
@@ -307,6 +365,16 @@ class CrawlerCommands(commands.Cog):
                 self._stats["errors"] += 1
 
             stack = [start_room]   # path stack; stack[-1] is the room we're standing in
+
+            def _elapsed_str():
+                elapsed = int((datetime.now() - self._stats["started"]).total_seconds())
+                m, s = divmod(elapsed, 60)
+                h, m = divmod(m, 60)
+                return f"{h}h {m}m {s}s" if h else f"{m}m {s}s"
+
+            # Single self-editing progress embed — replaces the old per-100-rooms flood.
+            progress_msg = await ctx.send(embed=self._build_progress_embed(
+                char_name, len(visited), new_rooms, new_mobs, counters, _elapsed_str()))
 
             while stack and not self._stop_flag:
                 current = stack[-1]
@@ -375,32 +443,27 @@ class CrawlerCommands(commands.Cog):
                 stack.append(nxt)
 
                 if len(visited) % PROGRESS_EVERY == 0:
-                    await ctx.send(
-                        f"\U0001F5FA\uFE0F **Crawl progress** \u2014 {len(visited):,} rooms visited \u00b7 "
-                        f"{new_rooms:,} new rooms \u00b7 {new_mobs:,} new mobs \u00b7 "
-                        f"depth {len(stack)} \u00b7 {self._stats['locked']} locked")
+                    try:
+                        await progress_msg.edit(embed=self._build_progress_embed(
+                            char_name, len(visited), new_rooms, new_mobs,
+                            counters, _elapsed_str()))
+                    except Exception:
+                        pass   # a transient edit failure shouldn't derail the crawl
                     self._save(map_graph, crawl_mobs, locked_rooms, char_name, room_zones)
 
             # Final save
             self._save(map_graph, crawl_mobs, locked_rooms, char_name, room_zones)
 
-            elapsed = int((datetime.now() - self._stats["started"]).total_seconds())
-            mins, secs = divmod(elapsed, 60)
-            hrs,  mins = divmod(mins, 60)
-            elapsed_str = f"{hrs}h {mins}m {secs}s" if hrs else f"{mins}m {secs}s"
-
-            stop_reason = "stopped by user" if self._stop_flag else "complete"
-
-            await ctx.send(
-                f"✅ **Crawl {stop_reason}** — **{char_name}**\n"
-                f"Rooms visited: **{len(visited):,}** · "
-                f"New rooms: **{new_rooms:,}** · "
-                f"New mobs: **{new_mobs:,}**\n"
-                f"Locked/skipped: {self._stats['locked']} · "
-                f"Errors: {self._stats['errors']} · "
-                f"Time: {elapsed_str}\n"
-                f"Map and mob data saved."
-            )
+            # Flip the SAME live embed to its completed/stopped state (no new message).
+            try:
+                await progress_msg.edit(embed=self._build_progress_embed(
+                    char_name, len(visited), new_rooms, new_mobs, counters,
+                    _elapsed_str(), done=True, stopped=self._stop_flag))
+            except Exception:
+                # Fallback: if the original message is gone, post a fresh summary.
+                await ctx.send(embed=self._build_progress_embed(
+                    char_name, len(visited), new_rooms, new_mobs, counters,
+                    _elapsed_str(), done=True, stopped=self._stop_flag))
 
         except Exception as e:
             await ctx.send(f"❌ Crawl failed: {e}")
