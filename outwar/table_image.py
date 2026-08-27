@@ -59,6 +59,8 @@ TEXT_GOLD    = (255, 205,  60)   # brighter gold
 TEXT_ORANGE  = (255, 150,  50)   # warning orange — nearly capped
 TEXT_BLUE    = (130, 185, 255)   # brighter blue
 DIVIDER      = ( 40,  44,  80)
+SLOT_BG      = ( 24,  27,  52)   # paperdoll slot fill (behind each item)
+SLOT_EDGE    = ( 70,  76,  120)  # paperdoll slot frame
 
 ROW_H        = 34
 HEADER_H     = 42
@@ -507,7 +509,8 @@ def render_profile(profile: dict) -> io.BytesIO:
 
 
 def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = None,
-                        item_icons: dict = None, augments: list = None) -> io.BytesIO:
+                        item_icons: dict = None, augments: list = None,
+                        crown_icon=None) -> io.BytesIO:
     """
     Render a showpiece profile card faithful to Outwar's own layout: 2-column stat
     block on the left, the real equipment PAPERDOLL in the middle (items at their true
@@ -592,7 +595,8 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
     left_block  = TITLE_H + len(ordered) * stat_h + PAD
     right_block = TITLE_H + doll_h + crest_h + PAD
     aug_block   = TITLE_H + aug_h + PAD
-    total_h = max(left_block, right_block, aug_block) + PAD
+    SIG_H = 24   # room for the "From DeathBot" signature strip at the bottom
+    total_h = max(left_block, right_block, aug_block) + PAD + SIG_H
     total_w = PAD + left_w + PAD + doll_w + (PAD + aug_w if augments else 0) + PAD
 
     img  = Image.new("RGB", (total_w, total_h), BG_DARK)
@@ -607,6 +611,17 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
     if klass: sub_bits.append(klass)
     if sub_bits:
         draw.text((PAD, 58), "  ·  ".join(sub_bits), font=font_sub, fill=TEXT_GOLD)
+
+    # ---- Preferred Player crown (top-right of the title bar, Bloop-style) ----
+    # Uses Outwar's own ProPP.png so it matches the game exactly; skipped silently
+    # if the account isn't PP or the image couldn't be fetched.
+    if profile.get("is_preferred") and crown_icon is not None:
+        try:
+            cw = ch = TITLE_H - 28          # fit within the title bar with margin
+            cr = crown_icon.convert("RGBA").resize((cw, ch))
+            img.paste(cr, (total_w - PAD - cw, (TITLE_H - ch) // 2), cr)
+        except Exception:
+            pass
 
     # ---- Left: PLAYER INFO, two stats per row ----
     draw.text((PAD, TITLE_H + 4), "PLAYER INFO", font=font_sec, fill=TEXT_HEADER)
@@ -633,6 +648,11 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
         iy = dy0 + int(it["y"] * dollscale)
         iw = max(8, int(it["w"] * dollscale))
         ih = max(8, int(it["h"] * dollscale))
+        # Edge box (Bloop-style slot frame): a subtly filled, outlined cell behind
+        # each item so equipped gear reads as slotted rather than floating.
+        pad = 3
+        draw.rectangle([ix - pad, iy - pad, ix + iw + pad, iy + ih + pad],
+                       fill=SLOT_BG, outline=SLOT_EDGE, width=1)
         icon = item_icons.get(it["img"])
         if icon is not None:
             try:
@@ -685,6 +705,16 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
                     pass
             # empty slot or missing icon → faint outlined box
             draw.rectangle([gx, gy, gx + gem, gy + gem], outline=DIVIDER)
+
+    # ---- Signature strip: "From DeathBot" bottom-right ----
+    font_sig = _load_font(12, bold=True)
+    sig = "\u2756 From DeathBot"   # black diamond-minus glyph (renders in DejaVu)
+    try:
+        sw = draw.textlength(sig, font=font_sig)
+    except Exception:
+        sw = 90
+    draw.text((total_w - PAD - sw, total_h - SIG_H + 2), sig,
+              font=font_sig, fill=TEXT_DIM)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")

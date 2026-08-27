@@ -418,10 +418,12 @@ def parse_full_profile(html: str) -> dict:
                     out["faction_name"] = value
                     out["faction"] = value
 
+    # --- Preferred Player: the header shows /images/profile/ProPP.png with a
+    #     "Preferred Player" popup. The filename alone is a reliable, specific flag
+    #     (it only appears for PP accounts), so key off that.
+    out["is_preferred"] = ("ProPP.png" in html) or ("Preferred Player" in html)
+
     return out
-
-
-def parse_max_rage(html: str):
     """Extract max rage value from world page."""
     soup = BeautifulSoup(html, "lxml")
     node = soup.select_one("header ul li div div:nth-of-type(4) p")

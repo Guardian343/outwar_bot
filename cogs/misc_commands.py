@@ -1002,9 +1002,24 @@ class GroupStatCommands(commands.Cog):
                     if im is not None:
                         item_icons[url] = im
 
+            # 3b. Preferred-Player crown — fetch Outwar's own ProPP.png so it matches
+            #     the game exactly. Only when the profile is flagged PP; a failed fetch
+            #     just means no crown (never blocks the card).
+            crown_icon = None
+            if profile.get("is_preferred"):
+                try:
+                    async with _aiohttp.ClientSession() as http:
+                        cu = f"{SIGIL}/images/profile/ProPP.png"
+                        async with http.get(cu, timeout=_aiohttp.ClientTimeout(total=10)) as r:
+                            if r.status == 200:
+                                crown_icon = _PILImage.open(_io.BytesIO(await r.read()))
+                except Exception:
+                    crown_icon = None
+
             # 4. Render — full paperdoll (+ augments) if we parsed items, else stat card.
             if paperdoll["items"]:
-                buf = render_profile_full(profile, paperdoll, crests, item_icons, augments)
+                buf = render_profile_full(profile, paperdoll, crests, item_icons,
+                                          augments, crown_icon=crown_icon)
             else:
                 buf = render_profile(profile)
 
@@ -1023,6 +1038,51 @@ class GroupStatCommands(commands.Cog):
         except Exception as e:
             logger.warning("MISC", f"[profile] error for {name}: {e}")
             await msg.edit(content=f"⚠️ Error building profile for **{name}**: `{e}`")
+
+    @commands.command(name="profile-raw")
+    async def profile_raw(self, ctx, *, name: str):
+        """
+        Diagnostic: dump the profile-header HTML region so we can see how the
+        Preferred-Player crown and the profile picture are represented, then build
+        parsers from the real structure. Usage: !profile-raw <outwar name>
+        """
+        name = name.strip()
+        if not name:
+            await ctx.send("Usage: `!profile-raw <outwar name>`")
+            return
+        await ctx.send(f"🔬 Dumping profile HTML for **{name}**…")
+        try:
+            import re as _re
+            html = await self.session.get(f"profile.php?transnick={name}&server=1")
+
+            # 1. Any <img> whose src/context suggests a profile picture or crown/badge.
+            imgs = _re.findall(r"<img[^>]+>", html, _re.IGNORECASE)
+            interesting = [t for t in imgs if _re.search(
+                r"prefer|crown|premium|badge|avatar|profile|pic|myimages|upload|custom",
+                t, _re.IGNORECASE)]
+
+            # 2. The header block — grab a window around the character name so we can
+            #    see the crown/preferred markup that sits next to it in Bloop's card.
+            head = ""
+            m = _re.search(_re.escape(name), html, _re.IGNORECASE)
+            if m:
+                s = max(0, m.start() - 400)
+                head = html[s:m.end() + 400]
+
+            def _chunk(label, body):
+                body = body.strip() or "(none found)"
+                for i in range(0, len(body), 1800):
+                    part = body[i:i + 1800]
+                    return f"**{label}:**\n```html\n{part}\n```"
+
+            await ctx.send(_chunk(f"IMG tags matching profile/crown/avatar ({len(interesting)})",
+                                  "\n".join(interesting[:15])))
+            if head:
+                await ctx.send(_chunk("HTML around the character name (header region)", head))
+            else:
+                await ctx.send("Couldn't locate the name in the HTML to window the header.")
+        except Exception as e:
+            await ctx.send(f"⚠️ profile-raw error: `{e}`")
 
     @commands.command(name="group-stats")
     async def group_stats(self, ctx, *, group: str):
