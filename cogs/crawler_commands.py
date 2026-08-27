@@ -32,6 +32,29 @@ CRAWL_DELAY    = 0.3   # seconds between moves
 PROGRESS_EVERY = 100   # post update every N rooms
 
 
+def _lock_system(key: str):
+    """Map a lock-key name to its dungeon 'system' + a sort key, so the flat
+    96-room list collapses into the handful of keyed structures it really is.
+    Pattern-matched against real key names; anything unrecognised falls to
+    'Other' (safe — nothing is lost, it's just ungrouped)."""
+    k = (key or "Unknown key")
+    kl = k.lower()
+    if kl.startswith("tower key floor"):
+        m = re.search(r"floor\s+(\d+)", kl)
+        return ("Tower", int(m.group(1)) if m else 0)
+    if kl.startswith("text of"):
+        return ("The Texts", k)
+    if "grind door" in kl or "lost grind room" in kl:
+        m = re.search(r"(\d+)", kl)
+        return ("Grind", (0 if "grind door" in kl else 1, int(m.group(1)) if m else 0))
+    if kl.startswith("sanctum specialty"):
+        m = re.search(r"(\d+)", kl)
+        return ("Sanctum Specialty", int(m.group(1)) if m else 0)
+    if kl.startswith("ward of"):
+        return ("Wards", k)
+    return ("Other", k)
+
+
 def _add_wrapped_field(embed, name, lines, inline=False):
     """Add lines to an embed field, splitting into continuation fields when the
     1024-char Discord field cap would be exceeded. Never splits a line mid-way."""
@@ -558,8 +581,14 @@ class CrawlerCommands(commands.Cog):
     # ------------------------------------------------------------------
 
     @commands.command(name="locked")
-    async def locked_rooms_cmd(self, ctx):
-        """Show key-locked rooms discovered by the crawl (room → required key)."""
+    async def locked_rooms_cmd(self, ctx, *, system: str = ""):
+        """
+        Key-locked rooms discovered by the crawl, grouped by dungeon system.
+          !locked            → grouped summary (Tower, Texts, Grind, …)
+          !locked tower      → expand one system to its full room list
+          !locked other      → the ungrouped one-off keys
+        """
+        import discord
         try:
             with open(LOCKED_PATH) as f:
                 locked = json.load(f)
@@ -568,24 +597,69 @@ class CrawlerCommands(commands.Cog):
         if not locked:
             await ctx.send("No key-locked rooms recorded yet. Run a crawl first.")
             return
-        by_key = {}
+
+        # Build: system → { key_name → [room_ids] }, plus per-system room totals.
+        systems = {}
         for rid, info in locked.items():
-            k = info.get("key") or "Unknown key"
-            by_key.setdefault(k, []).append(rid)
-        lines = [f"🔒 **Key-locked rooms** ({len(locked)} total)"]
-        for k in sorted(by_key):
-            rooms = ", ".join(sorted(by_key[k], key=lambda x: int(x)))
-            lines.append(f"**{k}**: {rooms}")
-        # Chunk on LINE boundaries (never split a room number mid-way like the old
-        # fixed-width slice did).
-        buf = ""
-        for line in lines:
-            if len(buf) + len(line) + 1 > 1900:
-                await ctx.send(buf)
-                buf = ""
-            buf += (line + "\n")
-        if buf:
-            await ctx.send(buf)
+            key = info.get("key") or "Unknown key"
+            sysname, sortk = _lock_system(key)
+            bucket = systems.setdefault(sysname, {"keys": {}, "rooms": 0})
+            bucket["keys"].setdefault(key, {"rooms": [], "sort": sortk})["rooms"].append(rid)
+            bucket["rooms"] += 1
+
+        # Fixed display order for the known systems; anything else trails alphabetically.
+        order = ["Tower", "The Texts", "Grind", "Sanctum Specialty", "Wards", "Other"]
+        sys_names = [s for s in order if s in systems] + \
+                    sorted(s for s in systems if s not in order)
+
+        system = system.strip().lower()
+
+        # ---- Drill-down: expand one named system ----
+        if system:
+            match = next((s for s in sys_names if system in s.lower()), None)
+            if not match:
+                await ctx.send(f"🔎 No lock system matching `{system}`. "
+                               f"Try: {', '.join(f'`{s}`' for s in sys_names)}")
+                return
+            bucket = systems[match]
+            embed = discord.Embed(
+                title=f"🔒 {match} — {bucket['rooms']} locked room(s)",
+                color=discord.Color.dark_gold())
+            keys_sorted = sorted(bucket["keys"], key=lambda k: bucket["keys"][k]["sort"])
+            # Discord caps an embed at 25 fields. Systems with many keys (Tower has
+            # 50 floors) would overflow AND read as noise as one-field-per-key — so
+            # for anything over ~10 keys, render a single compact "key: rooms" list.
+            if len(keys_sorted) > 10:
+                lines = []
+                for key in keys_sorted:
+                    rooms = ", ".join(sorted(bucket["keys"][key]["rooms"], key=lambda x: int(x)))
+                    lines.append(f"**{key}** — {rooms}")
+                _add_wrapped_field(embed, f"{match} keys", lines)
+            else:
+                for key in keys_sorted:
+                    rooms = ", ".join(sorted(bucket["keys"][key]["rooms"], key=lambda x: int(x)))
+                    _add_wrapped_field(embed, key, [rooms])
+            await ctx.send(embed=embed)
+            return
+
+        # ---- Default: grouped summary ----
+        embed = discord.Embed(
+            title=f"🔒 Key-locked rooms — {len(locked)} rooms across {len(sys_names)} systems",
+            color=discord.Color.dark_gold())
+        for s in sys_names:
+            b = systems[s]
+            nkeys = len(b["keys"])
+            # A short, human summary of what's in the system.
+            if s == "Tower":
+                floors = sorted(int(re.search(r'(\d+)', k).group(1))
+                                for k in b["keys"] if re.search(r'\d+', k))
+                span = f"floors {floors[0]}–{floors[-1]}" if floors else f"{nkeys} keys"
+                desc = f"{span} · {b['rooms']} rooms"
+            else:
+                desc = f"{nkeys} key(s) · {b['rooms']} rooms"
+            embed.add_field(name=f"🗝️ {s}", value=desc, inline=False)
+        embed.set_footer(text="Use !locked <system> to expand one (e.g. !locked tower).")
+        await ctx.send(embed=embed)
 
     @commands.command(name="locked-clean")
     async def locked_clean_cmd(self, ctx, *room_ids):
