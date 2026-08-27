@@ -608,7 +608,7 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
         PIC_H += 26                        # header row ("PROFILE PICTURE")
 
     left_block  = TITLE_H + len(ordered) * stat_h + PIC_H + PAD
-    crown_head  = 26 if (profile.get("is_preferred") and crown_icon is not None) else 0
+    crown_head  = 40 if (profile.get("is_preferred") and crown_icon is not None) else 0
     right_block = TITLE_H + crown_head + doll_h + crest_h + PAD
     aug_block   = TITLE_H + aug_h + PAD
     SIG_H = 24   # room for the "From DeathBot" signature strip at the bottom
@@ -671,7 +671,7 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
     # A Preferred-Player crown sits above the Head slot, so give the paperdoll extra
     # top headroom to fit it between the header and the head item.
     if profile.get("is_preferred") and crown_icon is not None:
-        dy0 += 26
+        dy0 += 40
     # subtle backing panel
     draw.rectangle([dx0 - 6, dy0 - 6, dx0 + doll_w + 6, dy0 + doll_h + 6],
                    fill=BG_HEADER, outline=DIVIDER)
@@ -709,13 +709,14 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
             hx = dx0 + int(head["x"] * dollscale)
             hy = dy0 + int(head["y"] * dollscale)
             hw = max(8, int(head["w"] * dollscale))
-            # Crown a touch wider than the head slot, sat just above it (overlapping
-            # the top edge slightly so it "wears" the slot rather than floating).
-            cw = int(hw * 1.15)
+            # Crown HOVERS above the head slot (Bloop-style) — a little smaller than
+            # the slot and sat fully clear of it with a gap, so it reads as a floating
+            # badge rather than a helmet the character is wearing.
+            cw = int(hw * 0.9)
             ch = cw  # ProPP.png is ~square
             cx = hx + (hw - cw) // 2
-            cy = hy - ch + 8            # bottom of crown overlaps top of head slot
-            cy = max(dy0 - ch // 2, cy)  # don't push it up past the panel top
+            GAP = 4
+            cy = hy - ch - GAP          # bottom of crown sits a gap above the slot top
             cr = crown_icon.convert("RGBA").resize((cw, ch))
             img.paste(cr, (cx, cy), cr)
         except Exception:
