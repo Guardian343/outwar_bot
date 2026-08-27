@@ -510,7 +510,7 @@ def render_profile(profile: dict) -> io.BytesIO:
 
 def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = None,
                         item_icons: dict = None, augments: list = None,
-                        crown_icon=None) -> io.BytesIO:
+                        crown_icon=None, pic_icon=None) -> io.BytesIO:
     """
     Render a showpiece profile card faithful to Outwar's own layout: 2-column stat
     block on the left, the real equipment PAPERDOLL in the middle (items at their true
@@ -592,8 +592,24 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
         aug_w    = aug_cols * AUG_CELL + PAD  # grid + a little breathing room
         aug_h    = 40 + aug_rows * AUG_CELL   # header + rows
 
-    left_block  = TITLE_H + len(ordered) * stat_h + PAD
-    right_block = TITLE_H + doll_h + crest_h + PAD
+    # ---- Profile picture panel metrics (left column, under the stats) ----
+    # Only reserve space when a real pic exists; scaled to the left column width so
+    # it reads as a proper panel (Bloop-style) rather than a thumbnail.
+    PIC_W = 0
+    PIC_H = 0
+    if pic_icon is not None:
+        PIC_W = left_w
+        try:
+            pw, ph = pic_icon.size
+            PIC_H = int(PIC_W * (ph / pw)) if pw else 150
+        except Exception:
+            PIC_H = 150
+        PIC_H = max(90, min(PIC_H, 220))   # clamp so a tall/odd pic can't dominate
+        PIC_H += 26                        # header row ("PROFILE PICTURE")
+
+    left_block  = TITLE_H + len(ordered) * stat_h + PIC_H + PAD
+    crown_head  = 26 if (profile.get("is_preferred") and crown_icon is not None) else 0
+    right_block = TITLE_H + crown_head + doll_h + crest_h + PAD
     aug_block   = TITLE_H + aug_h + PAD
     SIG_H = 24   # room for the "From DeathBot" signature strip at the bottom
     total_h = max(left_block, right_block, aug_block) + PAD + SIG_H
@@ -612,17 +628,6 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
     if sub_bits:
         draw.text((PAD, 58), "  ·  ".join(sub_bits), font=font_sub, fill=TEXT_GOLD)
 
-    # ---- Preferred Player crown (top-right of the title bar, Bloop-style) ----
-    # Uses Outwar's own ProPP.png so it matches the game exactly; skipped silently
-    # if the account isn't PP or the image couldn't be fetched.
-    if profile.get("is_preferred") and crown_icon is not None:
-        try:
-            cw = ch = TITLE_H - 28          # fit within the title bar with margin
-            cr = crown_icon.convert("RGBA").resize((cw, ch))
-            img.paste(cr, (total_w - PAD - cw, (TITLE_H - ch) // 2), cr)
-        except Exception:
-            pass
-
     # ---- Left: PLAYER INFO, two stats per row ----
     draw.text((PAD, TITLE_H + 4), "PLAYER INFO", font=font_sec, fill=TEXT_HEADER)
     y = TITLE_H + 30
@@ -635,11 +640,38 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
         draw.text((cx, cy), label.upper(), font=font_lab, fill=TEXT_DIM)
         draw.text((cx, cy + 16), str(value), font=font_val, fill=colour)
 
+    # ---- Profile picture panel (left column, beneath the stats) ----
+    if pic_icon is not None and PIC_H:
+        px0 = PAD
+        py0 = y + ((len(ordered) + 1) // 2) * stat_h + 6
+        draw.text((px0, py0), "PROFILE PICTURE", font=font_sec, fill=TEXT_HEADER)
+        py0 += 24
+        panel_h = PIC_H - 26
+        # backing panel + the fitted image
+        draw.rectangle([px0 - 2, py0 - 2, px0 + PIC_W + 2, py0 + panel_h + 2],
+                       fill=BG_HEADER, outline=DIVIDER)
+        try:
+            pic = pic_icon.convert("RGBA")
+            pw, ph = pic.size
+            # fit within the panel preserving aspect ratio, then centre
+            scale = min(PIC_W / pw, panel_h / ph)
+            nw, nh = max(1, int(pw * scale)), max(1, int(ph * scale))
+            pic = pic.resize((nw, nh))
+            ox = px0 + (PIC_W - nw) // 2
+            oy = py0 + (panel_h - nh) // 2
+            img.paste(pic, (ox, oy), pic)
+        except Exception:
+            pass
+
     # ---- Right: the equipment paperdoll at true coordinates ----
     dx0 = PAD + left_w + PAD
     dy0 = TITLE_H + 4
     draw.text((dx0, dy0), "EQUIPMENT", font=font_sec, fill=TEXT_HEADER)
     dy0 += 26
+    # A Preferred-Player crown sits above the Head slot, so give the paperdoll extra
+    # top headroom to fit it between the header and the head item.
+    if profile.get("is_preferred") and crown_icon is not None:
+        dy0 += 26
     # subtle backing panel
     draw.rectangle([dx0 - 6, dy0 - 6, dx0 + doll_w + 6, dy0 + doll_h + 6],
                    fill=BG_HEADER, outline=DIVIDER)
@@ -662,6 +694,32 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
             except Exception:
                 pass
         draw.rectangle([ix, iy, ix + iw, iy + ih], outline=DIVIDER)
+
+    # ---- Preferred Player crown — hovering above the Head item (top-centre slot),
+    #      Bloop-style. The Head slot is the top-most paperdoll item (smallest y);
+    #      on a tie, the one nearest horizontal centre. Purely geometric, so it
+    #      doesn't depend on Outwar's slot labelling. Skipped if not PP / no image.
+    if profile.get("is_preferred") and crown_icon is not None and paperdoll["items"]:
+        try:
+            doll_mid = dx0 + doll_w // 2
+            def _head_key(it):
+                cx = dx0 + int(it["x"] * dollscale) + int(it["w"] * dollscale) // 2
+                return (it["y"], abs(cx - doll_mid))
+            head = min(paperdoll["items"], key=_head_key)
+            hx = dx0 + int(head["x"] * dollscale)
+            hy = dy0 + int(head["y"] * dollscale)
+            hw = max(8, int(head["w"] * dollscale))
+            # Crown a touch wider than the head slot, sat just above it (overlapping
+            # the top edge slightly so it "wears" the slot rather than floating).
+            cw = int(hw * 1.15)
+            ch = cw  # ProPP.png is ~square
+            cx = hx + (hw - cw) // 2
+            cy = hy - ch + 8            # bottom of crown overlaps top of head slot
+            cy = max(dy0 - ch // 2, cy)  # don't push it up past the panel top
+            cr = crown_icon.convert("RGBA").resize((cw, ch))
+            img.paste(cr, (cx, cy), cr)
+        except Exception:
+            pass
 
     # ---- Skill crests row beneath the paperdoll ----
     if crests:

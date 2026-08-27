@@ -423,6 +423,19 @@ def parse_full_profile(html: str) -> dict:
     #     (it only appears for PP accounts), so key off that.
     out["is_preferred"] = ("ProPP.png" in html) or ("Preferred Player" in html)
 
+    # --- Custom profile picture: <img id="profile-pic-fx" class="profilepic"
+    #     src="https://upload.outwar.com/uploaded/sNNN.png">. Match on either the id
+    #     or the class, then take the src. Only a REAL uploaded pic should show — a
+    #     missing/placeholder src leaves profile_pic None so the renderer skips the
+    #     panel (no empty box for accounts without a custom pic).
+    out["profile_pic"] = None
+    pic = soup.select_one("img#profile-pic-fx, img.profilepic")
+    if pic and pic.get("src"):
+        src = pic["src"].strip()
+        # Ignore obvious placeholders/blanks; keep only a genuine uploaded image.
+        if src and "blank" not in src.lower() and "default" not in src.lower():
+            out["profile_pic"] = src
+
     return out
     """Extract max rage value from world page."""
     soup = BeautifulSoup(html, "lxml")

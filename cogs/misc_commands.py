@@ -1002,24 +1002,37 @@ class GroupStatCommands(commands.Cog):
                     if im is not None:
                         item_icons[url] = im
 
-            # 3b. Preferred-Player crown — fetch Outwar's own ProPP.png so it matches
-            #     the game exactly. Only when the profile is flagged PP; a failed fetch
-            #     just means no crown (never blocks the card).
+            # 3b. Preferred-Player crown + custom profile picture — fetch Outwar's
+            #     own images so they match the game exactly. Each is optional: a
+            #     failed fetch (or absent asset) just means that piece is skipped,
+            #     never blocking the card.
             crown_icon = None
-            if profile.get("is_preferred"):
+            pic_icon = None
+            async def _fetch_img(http, url):
+                full = url
+                if full.startswith("/"):
+                    full = SIGIL + full
+                elif not full.startswith("http"):
+                    full = f"{SIGIL}/{full}"
                 try:
-                    async with _aiohttp.ClientSession() as http:
-                        cu = f"{SIGIL}/images/profile/ProPP.png"
-                        async with http.get(cu, timeout=_aiohttp.ClientTimeout(total=10)) as r:
-                            if r.status == 200:
-                                crown_icon = _PILImage.open(_io.BytesIO(await r.read()))
+                    async with http.get(full, timeout=_aiohttp.ClientTimeout(total=10)) as r:
+                        if r.status == 200:
+                            return _PILImage.open(_io.BytesIO(await r.read()))
                 except Exception:
-                    crown_icon = None
+                    return None
+                return None
+
+            async with _aiohttp.ClientSession() as http:
+                if profile.get("is_preferred"):
+                    crown_icon = await _fetch_img(http, f"{SIGIL}/images/profile/ProPP.png")
+                if profile.get("profile_pic"):
+                    pic_icon = await _fetch_img(http, profile["profile_pic"])
 
             # 4. Render — full paperdoll (+ augments) if we parsed items, else stat card.
             if paperdoll["items"]:
                 buf = render_profile_full(profile, paperdoll, crests, item_icons,
-                                          augments, crown_icon=crown_icon)
+                                          augments, crown_icon=crown_icon,
+                                          pic_icon=pic_icon)
             else:
                 buf = render_profile(profile)
 
