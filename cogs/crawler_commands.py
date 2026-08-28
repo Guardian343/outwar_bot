@@ -31,6 +31,12 @@ ZONES_PATH = os.path.join(os.path.dirname(__file__), "..", "database", "room_zon
 CRAWL_DELAY    = 0.3   # seconds between moves
 PROGRESS_EVERY = 100   # post update every N rooms
 
+# The room-11 "reset" anchor: world.php?room=11 teleports ANY account to room 11
+# instantly (per Liam's confirmed reset trick). It's a universal, always-reachable
+# starting point, so routing defaults to it when no start is given.
+RESET_ROOM = 11
+RESET_ROOM_URL = "world.php?room=11"
+
 
 def _lock_system(key: str):
     """Map a lock-key name to its dungeon 'system' + a sort key, so the flat
@@ -1230,6 +1236,133 @@ class CrawlerCommands(commands.Cog):
             lines.append(f"• **{name}** — room {rid}"
                          + (f" ({zone})" if zone else "") + f" — {d}")
         await ctx.send("\n".join(lines))
+
+    @commands.command(name="tour")
+    async def tour_cmd(self, ctx, *, query: str = ""):
+        """
+        Order a set of raid targets into an efficient walking tour using greedy
+        nearest-neighbour — the fix for zig-zagging between gods in listed order.
+          !tour                     → all raids, starting from room 11 (the teleport anchor)
+          !tour raids from 11       → same, explicit
+          !tour mobs from Rillax    → tour attackable mobs starting at Rillax's room
+          !tour 30 60 90            → order just these rooms, from room 11
+          !tour 30 60 90 from 11    → order these rooms from a given start
+        Greedy: from the start, go to the nearest target, then the nearest unvisited
+        from there, and so on. Pure graph maths — nothing moves.
+        """
+        from outwar.scraper import bfs_nearest, find_path
+        q = query.strip()
+
+        try:
+            with open(MOBS_PATH) as f:
+                mobs = json.load(f)
+        except Exception:
+            mobs = {}
+        try:
+            with open(ZONES_PATH) as f:
+                room_zones = json.load(f)
+        except Exception:
+            room_zones = {}
+
+        def _resolve(token):
+            token = token.strip().strip('"')
+            if token.isdigit():
+                return int(token), f"room {token}"
+            tl = token.lower()
+            for m in mobs.values():
+                if tl in m.get("name", "").lower() and m.get("rooms"):
+                    return int(m["rooms"][0]), f"{m['name']} (room {m['rooms'][0]})"
+            for rid, zname in room_zones.items():
+                if tl in zname.lower():
+                    return int(rid), f"{zname} (room {rid})"
+            return None, token
+
+        # Parse: optional "... from <start>", and the target spec (a category word,
+        # or an explicit list of room numbers). Default start = room 11 (teleport anchor).
+        cat = "raid"
+        cat_map = {"raid": "raid", "raids": "raid", "mob": "attack", "mobs": "attack",
+                   "npc": "talk", "npcs": "talk", "quest": "talk", "quests": "talk"}
+        start = RESET_ROOM
+        start_label = f"room {RESET_ROOM}"
+        spec = q
+        ql = q.lower()
+        if " from " in ql:
+            spec, start_raw = q[:ql.index(" from ")].strip(), q[ql.index(" from ") + 6:].strip()
+            s, sl = _resolve(start_raw)
+            if s is None:
+                await ctx.send(f"🔎 Couldn't resolve start **{start_raw}** to a room.")
+                return
+            start, start_label = s, sl
+
+        # Build the target list.
+        explicit_rooms = [int(t) for t in spec.split() if t.isdigit()]
+        room_mob = {}
+        if explicit_rooms:
+            targets = set(explicit_rooms)
+            for m in mobs.values():
+                for rid in m.get("rooms", []):
+                    if int(rid) in targets:
+                        room_mob.setdefault(int(rid), m.get("name", "?"))
+        else:
+            # category spec (first word if it's a category, else default raids)
+            w = spec.split()[0].lower() if spec.split() else ""
+            if w in cat_map:
+                cat = cat_map[w]
+            targets = set()
+            for m in mobs.values():
+                if (m.get("category") or "attack") != cat:
+                    continue
+                for rid in m.get("rooms", []):
+                    targets.add(int(rid))
+                    room_mob.setdefault(int(rid), m.get("name", "?"))
+            if not targets:
+                label = {"raid": "raids", "attack": "attackable mobs", "talk": "quest-givers"}[cat]
+                await ctx.send(f"No {label} in the crawl DB yet — run a crawl first.")
+                return
+
+        if not targets:
+            await ctx.send("No valid targets to tour.")
+            return
+
+        # Greedy nearest-neighbour: repeatedly hop to the closest unvisited target.
+        remaining = set(targets)
+        remaining.discard(start)          # if start is itself a target, count it visited
+        cur = start
+        legs = []                          # (room, mob_name, hops_this_leg)
+        total = 0
+        unreachable = []
+        while remaining:
+            nxt = bfs_nearest(cur, remaining, limit=1)
+            if not nxt:
+                unreachable = sorted(remaining)
+                break
+            rid, dist = nxt[0]
+            legs.append((rid, room_mob.get(rid, "?"), dist))
+            total += dist
+            cur = rid
+            remaining.discard(rid)
+
+        if not legs:
+            await ctx.send(f"🚫 No reachable targets from **{start_label}**.")
+            return
+
+        icon = {"raid": "🐉", "attack": "⚔️", "talk": "📜"}.get(cat, "•")
+        header = (f"🧭 **Tour from {start_label}** — {len(legs)} stop"
+                  f"{'s' if len(legs) != 1 else ''}, **{total} hops** total")
+        lines = [header, f"_Reach the start instantly via the room-11 teleport._"
+                 if start == RESET_ROOM else ""]
+        running = 0
+        for i, (rid, name, dist) in enumerate(legs, 1):
+            running += dist
+            zone = room_zones.get(str(rid))
+            lines.append(f"{i}. {icon} **{name}** — room {rid}"
+                         + (f" ({zone})" if zone else "")
+                         + f" — {dist} hop{'s' if dist != 1 else ''} (cum {running})")
+        if unreachable:
+            lines.append(f"\n⚠️ Couldn't reach {len(unreachable)} target(s) by walking "
+                         f"(teleporter-only or unmapped): {', '.join(map(str, unreachable[:15]))}"
+                         + ("…" if len(unreachable) > 15 else ""))
+        await self._send_chunked(ctx, "\n".join(l for l in lines if l))
 
     @commands.command(name="crawl-stop")
     async def crawl_stop(self, ctx):
