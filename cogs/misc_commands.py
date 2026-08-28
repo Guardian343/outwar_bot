@@ -1093,11 +1093,24 @@ class GroupStatCommands(commands.Cog):
             else:
                 idxs = [round(i * (n - 1) / (SAMPLES - 1)) for i in range(SAMPLES)] \
                        if SAMPLES > 1 else [0]
+            # Coalesce each sampled frame (composite from 0) so the thumbnails match
+            # exactly what the profile card will now render — this makes the contact
+            # sheet a faithful preview of the coalescing fix, not the old streaky seek.
+            def _coalesce_to(target):
+                canvas = None
+                for j in range(0, target + 1):
+                    im.seek(j)
+                    fr = im.convert("RGBA")
+                    if canvas is None:
+                        canvas = fr.copy()
+                    else:
+                        canvas.alpha_composite(fr)
+                return canvas if canvas is not None else im.convert("RGBA")
+
             frames = []
             for i in idxs:
                 try:
-                    im.seek(i)
-                    frames.append((i, im.convert("RGBA").resize((64, 64))))
+                    frames.append((i, _coalesce_to(i).resize((64, 64))))
                 except Exception:
                     pass
 
