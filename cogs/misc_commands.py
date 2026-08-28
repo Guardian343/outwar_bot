@@ -1058,13 +1058,15 @@ class GroupStatCommands(commands.Cog):
     @commands.command(name="gif-probe")
     async def gif_probe(self, ctx, *, item_url: str):
         """
-        Diagnostic: fetch one Outwar item icon and report each animation frame's
-        brightness + opaque coverage, so we can see WHICH frame is the clean item
-        (vs a glow/blank frame). Paste a /images/items/*.gif URL (or full URL).
-        Usage: !gif-probe images/items/somegif.gif
+        Diagnostic: fetch one Outwar item GIF and render a CONTACT SHEET — a grid of
+        thumbnails sampled evenly across the animation, each labelled with its frame
+        number. For constantly-animated items (the Ghostly set is 300 frames) there's
+        no single "clean" frame, so look at the sheet and tell me which frame number
+        looks like the item you want — I'll set the picker to use that strategy.
+        Usage: !gif-probe images/items/ghostlyhelm.gif
         """
         import io as _io, aiohttp as _aiohttp
-        from PIL import Image as _PILImage, ImageSequence as _ImageSequence
+        from PIL import Image as _PILImage, ImageSequence as _ImageSequence, ImageDraw as _ImageDraw
         SIGIL = "https://sigil.outwar.com"
         u = item_url.strip()
         if u.startswith("/"):
@@ -1073,7 +1075,7 @@ class GroupStatCommands(commands.Cog):
             full = f"{SIGIL}/{u}"
         else:
             full = u
-        await ctx.send(f"🔬 Probing `{full}`…")
+        await ctx.send(f"🔬 Building contact sheet for `{full.split('/')[-1]}`…")
         try:
             async with _aiohttp.ClientSession() as http:
                 async with http.get(full, timeout=_aiohttp.ClientTimeout(total=10)) as r:
@@ -1083,25 +1085,46 @@ class GroupStatCommands(commands.Cog):
                     data = await r.read()
             im = _PILImage.open(_io.BytesIO(data))
             n = getattr(im, "n_frames", 1)
-            animated = getattr(im, "is_animated", False)
-            lines = [f"**{full.split('/')[-1]}** — animated={animated}, frames={n}, "
-                     f"format={im.format}, mode={im.mode}"]
-            # Per-frame: mean brightness over opaque px + opaque coverage fraction.
-            for idx, fr in enumerate(_ImageSequence.Iterator(im)):
-                f = fr.convert("RGBA")
-                px = f.load(); w, h = f.size
-                step = max(1, min(w, h)//24)
-                tot=0.0; opq=0; nn=0
-                for yy in range(0,h,step):
-                    for xx in range(0,w,step):
-                        rr,gg,bb,aa = px[xx,yy]; nn+=1
-                        if aa>40: opq+=1; tot+=(rr+gg+bb)
-                bright = (tot/opq) if opq else 0
-                cov = (opq/nn) if nn else 0
-                lines.append(f"frame {idx}: brightness {bright:5.0f}/765 · opaque {cov*100:4.0f}%")
-                if idx >= 11:
-                    lines.append(f"…(+{n-12} more frames)"); break
-            await ctx.send("```\n" + "\n".join(lines) + "\n```")
+
+            # Sample up to 24 frames evenly across the whole animation.
+            SAMPLES = min(24, n)
+            if n <= 1:
+                idxs = [0]
+            else:
+                idxs = [round(i * (n - 1) / (SAMPLES - 1)) for i in range(SAMPLES)] \
+                       if SAMPLES > 1 else [0]
+            frames = []
+            for i in idxs:
+                try:
+                    im.seek(i)
+                    frames.append((i, im.convert("RGBA").resize((64, 64))))
+                except Exception:
+                    pass
+
+            # Lay out a labelled grid.
+            cols = 6
+            cell = 64
+            label_h = 16
+            pad = 6
+            rows = (len(frames) + cols - 1) // cols
+            W = cols * cell + (cols + 1) * pad
+            H = rows * (cell + label_h) + (rows + 1) * pad + 24
+            sheet = _PILImage.new("RGBA", (W, H), (24, 26, 44, 255))
+            d = _ImageDraw.Draw(sheet)
+            d.text((pad, 6), f"{full.split('/')[-1]} — {n} frames — sampled below (frame #)",
+                   fill=(200, 205, 235, 255))
+            for k, (fi, fim) in enumerate(frames):
+                cx = pad + (k % cols) * (cell + pad)
+                cy = 24 + pad + (k // cols) * (cell + label_h + pad)
+                sheet.alpha_composite(fim, (cx, cy))
+                d.rectangle([cx, cy, cx + cell, cy + cell], outline=(70, 76, 120, 255))
+                d.text((cx + 2, cy + cell + 2), f"#{fi}", fill=(180, 185, 230, 255))
+
+            out = _io.BytesIO(); sheet.convert("RGB").save(out, format="PNG"); out.seek(0)
+            await ctx.send(
+                content=(f"Contact sheet for **{full.split('/')[-1]}** ({n} frames). "
+                         f"Tell me which frame # looks right and I'll lock the picker to it."),
+                file=discord.File(out, filename="gif_contact_sheet.png"))
         except Exception as e:
             await ctx.send(f"⚠️ gif-probe error: `{e}`")
 
