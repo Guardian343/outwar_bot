@@ -331,13 +331,6 @@ def parse_skill_crests(html: str) -> list:
     return crests
 
 
-def parse_equipped_items(html: str) -> list:
-    """Back-compat: flat list of equipped item {id,img} (no coords). Prefer
-    parse_equipment_paperdoll for layout-faithful rendering."""
-    pd = parse_equipment_paperdoll(html)
-    return [{"id": it["id"], "img": it["img"]} for it in pd["items"] if it["id"]]
-
-
 def parse_full_profile(html: str) -> dict:
     """
     Rich profile parse for the !profile command card. Reads every label/value row

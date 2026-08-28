@@ -1034,6 +1034,104 @@ class CrawlerCommands(commands.Cog):
         if buf.strip():
             await ctx.send(buf)
 
+    @commands.command(name="route")
+    async def route_cmd(self, ctx, *, query: str = ""):
+        """
+        Show the walking route between two rooms using the crawled map graph.
+          !route 11 to 43615        → room number to room number
+          !route 11 43615           → 'to' is optional
+          !route Rillax to 11       → resolve a mob/zone NAME to its room, then route
+        Pure graph maths over the crawl DB — no live calls, nothing moves. Useful for
+        reachability checks (does a path even exist, or is the target teleporter-only?)
+        and as the groundwork for autonomous crew routing.
+        """
+        from outwar.scraper import find_path
+        q = query.strip()
+        if not q:
+            await ctx.send("Usage: `!route <from> <to>` — rooms or names, e.g. "
+                           "`!route 11 to 43615` or `!route Rillax to 11`.")
+            return
+
+        # Split on ' to ' if present, else on whitespace into two halves.
+        if " to " in q.lower():
+            idx = q.lower().index(" to ")
+            a_raw, b_raw = q[:idx].strip(), q[idx + 4:].strip()
+        else:
+            parts = q.split()
+            if len(parts) < 2:
+                await ctx.send("Give me two endpoints, e.g. `!route 11 43615`.")
+                return
+            a_raw, b_raw = parts[0], " ".join(parts[1:])
+
+        # Load DBs once for name resolution + zone labelling.
+        try:
+            with open(MOBS_PATH) as f:
+                mobs = json.load(f)
+        except Exception:
+            mobs = {}
+        try:
+            with open(ZONES_PATH) as f:
+                room_zones = json.load(f)
+        except Exception:
+            room_zones = {}
+
+        def _resolve(token):
+            """Return (room_id:int, label:str) or (None, reason). A bare number is a
+            room; otherwise treat as a mob/zone name and find a room containing it."""
+            token = token.strip().strip('"')
+            if token.isdigit():
+                return int(token), f"room {token}"
+            # name → mob room (first match, case-insensitive contains)
+            tl = token.lower()
+            for m in mobs.values():
+                if tl in (m.get("name", "").lower()) and m.get("rooms"):
+                    return int(m["rooms"][0]), f"{m['name']} (room {m['rooms'][0]})"
+            # name → zone (first room in that zone)
+            for rid, zname in room_zones.items():
+                if tl in zname.lower():
+                    return int(rid), f"{zname} (room {rid})"
+            return None, token
+
+        a_room, a_label = _resolve(a_raw)
+        b_room, b_label = _resolve(b_raw)
+        if a_room is None:
+            await ctx.send(f"🔎 Couldn't resolve **{a_raw}** to a room "
+                           f"(not a number, and no matching mob/zone in the crawl DB).")
+            return
+        if b_room is None:
+            await ctx.send(f"🔎 Couldn't resolve **{b_raw}** to a room "
+                           f"(not a number, and no matching mob/zone in the crawl DB).")
+            return
+
+        if a_room == b_room:
+            await ctx.send(f"You're already there — **{a_label}** and **{b_label}** are the same room.")
+            return
+
+        path = find_path(a_room, b_room)
+        if not path:
+            await ctx.send(
+                f"🚫 No walking route found from **{a_label}** to **{b_label}**.\n"
+                f"Either the map graph doesn't connect them, or the target sits behind "
+                f"a teleporter-only or key-locked boundary the crawl couldn't walk through.")
+            return
+
+        hops = len(path) - 1
+        # Zone-annotate the endpoints; keep the room list compact.
+        def _zone_of(rid):
+            return room_zones.get(str(rid))
+        za, zb = _zone_of(a_room), _zone_of(b_room)
+        head = (f"🧭 **Route: {a_label} → {b_label}**\n"
+                f"**{hops}** hop{'s' if hops != 1 else ''}"
+                + (f" · {za} → {zb}" if za and zb and za != zb else (f" · {za}" if za else ""))
+                + "\n")
+        # Render the room sequence; chunk if very long.
+        seq = " → ".join(str(r) for r in path)
+        if len(seq) <= 1800:
+            await ctx.send(head + f"```{seq}```")
+        else:
+            await ctx.send(head)
+            await self._send_chunked(ctx, seq)
+
     @commands.command(name="crawl-stop")
     async def crawl_stop(self, ctx):
         """Stop the currently running crawl."""
