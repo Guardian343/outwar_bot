@@ -1132,6 +1132,105 @@ class CrawlerCommands(commands.Cog):
             await ctx.send(head)
             await self._send_chunked(ctx, seq)
 
+    @commands.command(name="nearest")
+    async def nearest_cmd(self, ctx, *, query: str = ""):
+        """
+        From a starting room, find the closest raids (or mobs / NPCs) by walking
+        distance — the building block for greedy nearest-neighbour raid routing.
+          !nearest 11              → closest raids to room 11
+          !nearest raids from 11   → same, explicit
+          !nearest mobs from 11    → closest attackable mobs
+          !nearest npcs from 11    → closest quest-givers
+          !nearest Rillax          → closest raids to Rillax's room
+        Pure graph maths over the crawl DB — nothing moves.
+        """
+        from outwar.scraper import bfs_nearest
+        q = query.strip()
+        if not q:
+            await ctx.send("Usage: `!nearest <room>` or `!nearest raids from <room>` "
+                           "(categories: raids, mobs, npcs).")
+            return
+
+        # Parse optional "<category> from <where>" or just "<where>".
+        cat = "raid"
+        cat_map = {"raid": "raid", "raids": "raid", "mob": "attack", "mobs": "attack",
+                   "attack": "attack", "npc": "talk", "npcs": "talk", "talk": "talk",
+                   "quest": "talk", "quests": "talk"}
+        ql = q.lower()
+        where = q
+        if " from " in ql:
+            head, where = q[:ql.index(" from ")].strip(), q[ql.index(" from ") + 6:].strip()
+            if head.lower() in cat_map:
+                cat = cat_map[head.lower()]
+        else:
+            # maybe first word is a category with no 'from' (e.g. "!nearest raids")
+            parts = q.split()
+            if parts and parts[0].lower() in cat_map and len(parts) > 1:
+                cat = cat_map[parts[0].lower()]
+                where = " ".join(parts[1:])
+
+        try:
+            with open(MOBS_PATH) as f:
+                mobs = json.load(f)
+        except Exception:
+            mobs = {}
+        try:
+            with open(ZONES_PATH) as f:
+                room_zones = json.load(f)
+        except Exception:
+            room_zones = {}
+
+        # Resolve the start room (number, or mob/zone name → room).
+        def _resolve(token):
+            token = token.strip().strip('"')
+            if token.isdigit():
+                return int(token), f"room {token}"
+            tl = token.lower()
+            for m in mobs.values():
+                if tl in m.get("name", "").lower() and m.get("rooms"):
+                    return int(m["rooms"][0]), f"{m['name']} (room {m['rooms'][0]})"
+            for rid, zname in room_zones.items():
+                if tl in zname.lower():
+                    return int(rid), f"{zname} (room {rid})"
+            return None, token
+
+        start, start_label = _resolve(where)
+        if start is None:
+            await ctx.send(f"🔎 Couldn't resolve **{where}** to a room.")
+            return
+
+        # Build the target set: all rooms containing a mob of the chosen category,
+        # with a room → best-mob-name map for display.
+        targets = set()
+        room_mob = {}
+        for m in mobs.values():
+            if (m.get("category") or "attack") != cat:
+                continue
+            for rid in m.get("rooms", []):
+                targets.add(int(rid))
+                room_mob.setdefault(int(rid), m.get("name", "?"))
+        if not targets:
+            label = {"raid": "raids", "attack": "attackable mobs", "talk": "quest-givers"}[cat]
+            await ctx.send(f"No {label} in the crawl DB yet — run a crawl first.")
+            return
+
+        results = bfs_nearest(start, targets, limit=8)
+        if not results:
+            await ctx.send(f"🚫 No reachable {cat} rooms from **{start_label}** "
+                           f"(map may not connect, or they're teleporter-only).")
+            return
+
+        icon = {"raid": "🐉", "attack": "⚔️", "talk": "📜"}[cat]
+        label = {"raid": "raids", "attack": "mobs", "talk": "quest-givers"}[cat]
+        lines = [f"{icon} **Nearest {label} to {start_label}:**"]
+        for rid, dist in results:
+            zone = room_zones.get(str(rid))
+            name = room_mob.get(rid, "?")
+            d = "here" if dist == 0 else f"{dist} hop{'s' if dist != 1 else ''}"
+            lines.append(f"• **{name}** — room {rid}"
+                         + (f" ({zone})" if zone else "") + f" — {d}")
+        await ctx.send("\n".join(lines))
+
     @commands.command(name="crawl-stop")
     async def crawl_stop(self, ctx):
         """Stop the currently running crawl."""

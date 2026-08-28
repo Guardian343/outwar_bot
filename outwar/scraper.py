@@ -1605,6 +1605,33 @@ def _load_map_graph() -> dict:
     return _map_graph
 
 
+def bfs_nearest(start: int, targets: set, limit: int = 5) -> list:
+    """Single outward BFS from `start`, returning up to `limit` of the nearest rooms
+    that are in `targets`, as (room_id, distance) sorted nearest-first. Far cheaper
+    than running find_path to every target: one traversal, stops once `limit` targets
+    are found. `start` itself counts as distance 0 if it's a target."""
+    graph = _load_map_graph()
+    if start not in graph:
+        return []
+    found = []
+    if start in targets:
+        found.append((start, 0))
+    visited = {start}
+    queue = deque([(start, 0)])
+    while queue and len(found) < limit:
+        node, dist = queue.popleft()
+        for neighbor in graph.get(node, []):
+            if neighbor not in visited:
+                visited.add(neighbor)
+                nd = dist + 1
+                if neighbor in targets:
+                    found.append((neighbor, nd))
+                    if len(found) >= limit:
+                        break
+                queue.append((neighbor, nd))
+    return found[:limit]
+
+
 def find_path(start: int, goal: int) -> list:
     """BFS shortest path from start room to goal room. Returns list of room IDs including start."""
     if start == goal:
