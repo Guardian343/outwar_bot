@@ -8,30 +8,27 @@ from PIL import Image, ImageDraw, ImageFont, ImageSequence
 
 def pick_item_frame(im: "Image.Image") -> "Image.Image":
     """
-    Outwar item/augment icons are often animated GIFs with a glow/fade effect. PIL
-    opens them on frame 0, which for a fade is usually the DIMMEST frame (item nearly
-    invisible, only the background glow) — so composited items looked like "just the
-    background effect". This scans all frames and returns the one with the most visible
-    content (highest mean luminance over opaque pixels). Static images pass through.
+    Return the clean, resting item icon for an Outwar equipment image.
+
+    Outwar item/augment icons are animated GIFs: the clean item is the FIRST frame
+    (the resting state); later frames animate a shine/glow sweep across it. Our old
+    approach scanned every frame and returned the BRIGHTEST — which is the shine
+    sweep at its peak, i.e. exactly the wrong frame. On sets like Ghostly that showed
+    as streaky, half-lit icons. OWBot doesn't pick a frame at all: it fetches the file
+    and lets the image library composite it, which yields the resting first frame.
+
+    We do the same — take frame 0, coalesced correctly. GIF frames can be stored as
+    partial deltas with a disposal method; seeking to 0 and converting through the
+    frame's own palette+transparency composites it properly (the streaks came from
+    converting a mid-animation delta frame without that composition). Static images
+    pass straight through.
     """
     try:
-        frames = [fr.convert("RGBA") for fr in ImageSequence.Iterator(im)]
-        if len(frames) <= 1:
+        if not getattr(im, "is_animated", False):
             return im.convert("RGBA")
-
-        def _score(f):
-            px = f.load()
-            w, h = f.size
-            step = max(1, min(w, h) // 24)
-            tot, n = 0.0, 0
-            for yy in range(0, h, step):
-                for xx in range(0, w, step):
-                    r, g, b, a = px[xx, yy]
-                    if a > 20:
-                        tot += (r + g + b); n += 1
-            return (tot / n) if n else 0.0
-
-        return max(frames, key=_score)
+        # Animated → coalesce and return the FIRST (resting) frame.
+        im.seek(0)
+        return im.convert("RGBA")
     except Exception:
         try:
             return im.convert("RGBA")
@@ -620,7 +617,7 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
     # row per stat while the draw loop packs two stats per row.)
     stat_rows   = (len(ordered) + 1) // 2
     left_block  = TITLE_H + stat_rows * stat_h + PIC_H + PAD + 30  # +30 header/pic gap
-    crown_head  = 30 if (profile.get("is_preferred") and crown_icon is not None) else 0
+    crown_head  = 46 if (profile.get("is_preferred") and crown_icon is not None) else 0
     right_block = TITLE_H + crown_head + doll_content_h + crest_h + PAD
     aug_block   = TITLE_H + aug_h + PAD
     SIG_H = 24   # room for the "From DeathBot" signature strip at the bottom
@@ -683,7 +680,7 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
     # A Preferred-Player crown sits above the equipment panel, so add a little top
     # headroom between the EQUIPMENT header and the panel for it to occupy.
     if profile.get("is_preferred") and crown_icon is not None:
-        dy0 += 30
+        dy0 += 46
     # subtle backing panel — sized to the actual item extent (not the raw bg_h,
     # which includes empty doll background and left a big void under the items).
     panel_h = doll_content_h
@@ -727,7 +724,7 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
             ch = cw  # ProPP.png is ~square
             cx = hx + (hw - cw) // 2         # centred on the head slot horizontally
             panel_top = dy0 - 6              # top edge of the equipment backing panel
-            cy = panel_top - ch + 4          # crown sits above the panel, slight overlap
+            cy = panel_top - ch - 8          # crown sits fully above the panel, clear gap
             cr = crown_icon.convert("RGBA").resize((cw, ch))
             img.paste(cr, (cx, cy), cr)
         except Exception:

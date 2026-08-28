@@ -989,8 +989,9 @@ class GroupStatCommands(commands.Cog):
                             async with http.get(full, timeout=_aiohttp.ClientTimeout(total=10)) as r:
                                 if r.status == 200:
                                     raw = _PILImage.open(_io.BytesIO(await r.read()))
-                                    # Item/aug icons are often animated glow GIFs — pick
-                                    # the fully-lit frame, not the dim frame 0.
+                                    # Item/aug icons are animated GIFs — use the clean
+                                    # resting first frame (see pick_item_frame), not a
+                                    # mid-animation shine frame.
                                     return url, pick_item_frame(raw)
                         except Exception:
                             return url, None
