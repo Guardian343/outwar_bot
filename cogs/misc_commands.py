@@ -1038,19 +1038,71 @@ class GroupStatCommands(commands.Cog):
 
             url = f"{SIGIL}/profile?transnick={name}&serverid=1"
             await msg.delete()
-            # Clean Bloop-style presentation: the card image in an embed whose TITLE
-            # is the clickable "Open in Browser" link — no separate URL preview unfurl.
-            embed = discord.Embed(
+            # Two stacked embeds in one message: the card image on its own, then a
+            # SEPARATE box beneath it carrying the "Open in Browser" link — so the
+            # link reads as its own panel under the image, not a title above it.
+            img_embed = discord.Embed(colour=discord.Colour.dark_theme())
+            img_embed.set_image(url="attachment://profile.png")
+            link_embed = discord.Embed(
                 title="🔗 Open in Browser",
                 url=url,
                 colour=discord.Colour.dark_theme(),
             )
-            embed.set_image(url="attachment://profile.png")
-            await ctx.send(embed=embed,
+            await ctx.send(embeds=[img_embed, link_embed],
                            file=discord.File(buf, filename="profile.png"))
         except Exception as e:
             logger.warning("MISC", f"[profile] error for {name}: {e}")
             await msg.edit(content=f"⚠️ Error building profile for **{name}**: `{e}`")
+
+    @commands.command(name="gif-probe")
+    async def gif_probe(self, ctx, *, item_url: str):
+        """
+        Diagnostic: fetch one Outwar item icon and report each animation frame's
+        brightness + opaque coverage, so we can see WHICH frame is the clean item
+        (vs a glow/blank frame). Paste a /images/items/*.gif URL (or full URL).
+        Usage: !gif-probe images/items/somegif.gif
+        """
+        import io as _io, aiohttp as _aiohttp
+        from PIL import Image as _PILImage, ImageSequence as _ImageSequence
+        SIGIL = "https://sigil.outwar.com"
+        u = item_url.strip()
+        if u.startswith("/"):
+            full = SIGIL + u
+        elif not u.startswith("http"):
+            full = f"{SIGIL}/{u}"
+        else:
+            full = u
+        await ctx.send(f"🔬 Probing `{full}`…")
+        try:
+            async with _aiohttp.ClientSession() as http:
+                async with http.get(full, timeout=_aiohttp.ClientTimeout(total=10)) as r:
+                    if r.status != 200:
+                        await ctx.send(f"⚠️ HTTP {r.status} fetching that URL.")
+                        return
+                    data = await r.read()
+            im = _PILImage.open(_io.BytesIO(data))
+            n = getattr(im, "n_frames", 1)
+            animated = getattr(im, "is_animated", False)
+            lines = [f"**{full.split('/')[-1]}** — animated={animated}, frames={n}, "
+                     f"format={im.format}, mode={im.mode}"]
+            # Per-frame: mean brightness over opaque px + opaque coverage fraction.
+            for idx, fr in enumerate(_ImageSequence.Iterator(im)):
+                f = fr.convert("RGBA")
+                px = f.load(); w, h = f.size
+                step = max(1, min(w, h)//24)
+                tot=0.0; opq=0; nn=0
+                for yy in range(0,h,step):
+                    for xx in range(0,w,step):
+                        rr,gg,bb,aa = px[xx,yy]; nn+=1
+                        if aa>40: opq+=1; tot+=(rr+gg+bb)
+                bright = (tot/opq) if opq else 0
+                cov = (opq/nn) if nn else 0
+                lines.append(f"frame {idx}: brightness {bright:5.0f}/765 · opaque {cov*100:4.0f}%")
+                if idx >= 11:
+                    lines.append(f"…(+{n-12} more frames)"); break
+            await ctx.send("```\n" + "\n".join(lines) + "\n```")
+        except Exception as e:
+            await ctx.send(f"⚠️ gif-probe error: `{e}`")
 
     @commands.command(name="profile-raw")
     async def profile_raw(self, ctx, *, name: str):

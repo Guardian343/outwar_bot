@@ -572,11 +572,19 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
     # ---- Layout metrics ----
     PAD        = 26
     TITLE_H    = 92
-    stat_h     = 46           # each stat cell (label above value)
+    stat_h     = 40           # each stat cell (label above value) — tightened from 46
     left_w     = 300
     dollscale  = 1.15         # scale the paperdoll up slightly for presence
     doll_w     = int(paperdoll["bg_w"] * dollscale)
     doll_h     = int(paperdoll["bg_h"] * dollscale)
+    # Actual vertical extent of the equipped items — the raw bg_h includes empty doll
+    # background below the last item, which produced a large void. Size the panel and
+    # all downstream layout to the real content instead.
+    if paperdoll["items"]:
+        doll_content_h = max(int((it["y"] + it["h"]) * dollscale)
+                             for it in paperdoll["items"]) + 12
+    else:
+        doll_content_h = doll_h
 
     crest_h = 0
     if crests:
@@ -607,9 +615,13 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
         PIC_H = max(90, min(PIC_H, 220))   # clamp so a tall/odd pic can't dominate
         PIC_H += 26                        # header row ("PROFILE PICTURE")
 
-    left_block  = TITLE_H + len(ordered) * stat_h + PIC_H + PAD
-    crown_head  = 40 if (profile.get("is_preferred") and crown_icon is not None) else 0
-    right_block = TITLE_H + crown_head + doll_h + crest_h + PAD
+    # Stats render two-per-row, so the block is ceil(n/2) rows tall — not n. (This
+    # was the source of the large dead space at the bottom: the height reserved a full
+    # row per stat while the draw loop packs two stats per row.)
+    stat_rows   = (len(ordered) + 1) // 2
+    left_block  = TITLE_H + stat_rows * stat_h + PIC_H + PAD + 30  # +30 header/pic gap
+    crown_head  = 30 if (profile.get("is_preferred") and crown_icon is not None) else 0
+    right_block = TITLE_H + crown_head + doll_content_h + crest_h + PAD
     aug_block   = TITLE_H + aug_h + PAD
     SIG_H = 24   # room for the "From DeathBot" signature strip at the bottom
     total_h = max(left_block, right_block, aug_block) + PAD + SIG_H
@@ -668,12 +680,14 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
     dy0 = TITLE_H + 4
     draw.text((dx0, dy0), "EQUIPMENT", font=font_sec, fill=TEXT_HEADER)
     dy0 += 26
-    # A Preferred-Player crown sits above the Head slot, so give the paperdoll extra
-    # top headroom to fit it between the header and the head item.
+    # A Preferred-Player crown sits above the equipment panel, so add a little top
+    # headroom between the EQUIPMENT header and the panel for it to occupy.
     if profile.get("is_preferred") and crown_icon is not None:
-        dy0 += 40
-    # subtle backing panel
-    draw.rectangle([dx0 - 6, dy0 - 6, dx0 + doll_w + 6, dy0 + doll_h + 6],
+        dy0 += 30
+    # subtle backing panel — sized to the actual item extent (not the raw bg_h,
+    # which includes empty doll background and left a big void under the items).
+    panel_h = doll_content_h
+    draw.rectangle([dx0 - 6, dy0 - 6, dx0 + doll_w + 6, dy0 + panel_h + 6],
                    fill=BG_HEADER, outline=DIVIDER)
     for it in paperdoll["items"]:
         ix = dx0 + int(it["x"] * dollscale)
@@ -695,10 +709,11 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
                 pass
         draw.rectangle([ix, iy, ix + iw, iy + ih], outline=DIVIDER)
 
-    # ---- Preferred Player crown — hovering above the Head item (top-centre slot),
-    #      Bloop-style. The Head slot is the top-most paperdoll item (smallest y);
-    #      on a tie, the one nearest horizontal centre. Purely geometric, so it
-    #      doesn't depend on Outwar's slot labelling. Skipped if not PP / no image.
+    # ---- Preferred Player crown — sits ABOVE the equipment panel (Bloop-style),
+    #      centred horizontally on the Head slot. The Head slot is the top-most
+    #      paperdoll item (smallest y); on a tie, nearest horizontal centre. Anchored
+    #      to the PANEL TOP so it clears the whole grid instead of hovering low over
+    #      the head item. Purely geometric — no dependence on Outwar's slot labels.
     if profile.get("is_preferred") and crown_icon is not None and paperdoll["items"]:
         try:
             doll_mid = dx0 + doll_w // 2
@@ -707,16 +722,12 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
                 return (it["y"], abs(cx - doll_mid))
             head = min(paperdoll["items"], key=_head_key)
             hx = dx0 + int(head["x"] * dollscale)
-            hy = dy0 + int(head["y"] * dollscale)
             hw = max(8, int(head["w"] * dollscale))
-            # Crown HOVERS above the head slot (Bloop-style) — a little smaller than
-            # the slot and sat fully clear of it with a gap, so it reads as a floating
-            # badge rather than a helmet the character is wearing.
-            cw = int(hw * 0.9)
+            cw = int(hw * 1.0)
             ch = cw  # ProPP.png is ~square
-            cx = hx + (hw - cw) // 2
-            GAP = 4
-            cy = hy - ch - GAP          # bottom of crown sits a gap above the slot top
+            cx = hx + (hw - cw) // 2         # centred on the head slot horizontally
+            panel_top = dy0 - 6              # top edge of the equipment backing panel
+            cy = panel_top - ch + 4          # crown sits above the panel, slight overlap
             cr = crown_icon.convert("RGBA").resize((cw, ch))
             img.paste(cr, (cx, cy), cr)
         except Exception:
@@ -724,7 +735,7 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
 
     # ---- Skill crests row beneath the paperdoll ----
     if crests:
-        cy0 = dy0 + doll_h + 16
+        cy0 = dy0 + doll_content_h + 22
         draw.text((dx0, cy0), "SKILL CRESTS", font=font_sec, fill=TEXT_HEADER)
         cy0 += 24
         # crests carry their own x within a 300-wide strip; scale to match doll
@@ -733,6 +744,10 @@ def render_profile_full(profile: dict, paperdoll: dict = None, crests: list = No
             cyy = cy0 + int(cr["y"] * dollscale)
             cw = max(8, int(cr["w"] * dollscale))
             ch = max(8, int(cr["h"] * dollscale))
+            # Edge box (same slot frame as equipment items) so crests read as slotted.
+            pad = 3
+            draw.rectangle([cx - pad, cyy - pad, cx + cw + pad, cyy + ch + pad],
+                           fill=SLOT_BG, outline=SLOT_EDGE, width=1)
             icon = item_icons.get(cr["img"])
             if icon is not None:
                 try:
