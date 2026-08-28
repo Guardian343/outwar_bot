@@ -8,32 +8,81 @@ from PIL import Image, ImageDraw, ImageFont, ImageSequence
 
 def pick_item_frame(im: "Image.Image") -> "Image.Image":
     """
-    Return the clean, resting item icon for an Outwar equipment image.
+    Return a clean, representative frame of an Outwar item/augment icon.
 
-    Outwar item/augment icons are animated GIFs: the clean item is the FIRST frame
-    (the resting state); later frames animate a shine/glow sweep across it. Our old
-    approach scanned every frame and returned the BRIGHTEST — which is the shine
-    sweep at its peak, i.e. exactly the wrong frame. On sets like Ghostly that showed
-    as streaky, half-lit icons. OWBot doesn't pick a frame at all: it fetches the file
-    and lets the image library composite it, which yields the resting first frame.
+    These icons are long looping animations (e.g. the Ghostly set is 300 frames; other
+    items differ — 210, etc.), so there is NO single "resting" frame:
+      - frame 0 is the darkest point of the cycle (looks dead/black),
+      - the brightest frame is the shimmer/glow peak (streaky, half-lit garbage).
+    Neither extreme is the icon a human recognises.
 
-    We do the same — take frame 0, coalesced correctly. GIF frames can be stored as
-    partial deltas with a disposal method; seeking to 0 and converting through the
-    frame's own palette+transparency composites it properly (the streaks came from
-    converting a mid-animation delta frame without that composition). Static images
-    pass straight through.
+    From eyeballing real contact sheets, the good-looking pose sits at a consistent
+    PHASE of the loop (~15-25% in) regardless of total frame count — a fraction, not a
+    fixed index, so it scales across items with different frame counts. To absorb
+    per-item variation we don't trust one exact frame: we sample a small window around
+    that phase and pick the frame whose brightness is closest to the animation's MEDIAN
+    (the item in its normal state — avoiding both the dark trough and the bright peak).
+
+    Static / single-frame images pass straight through.
     """
     try:
-        if not getattr(im, "is_animated", False):
+        n = getattr(im, "n_frames", 1)
+        if not getattr(im, "is_animated", False) or n <= 1:
             return im.convert("RGBA")
-        # Animated → coalesce and return the FIRST (resting) frame.
-        im.seek(0)
+
+        def _brightness(frame):
+            f = frame.convert("RGBA")
+            px = f.load(); w, h = f.size
+            step = max(1, min(w, h) // 16)
+            tot, cnt = 0.0, 0
+            for yy in range(0, h, step):
+                for xx in range(0, w, step):
+                    r, g, b, a = px[xx, yy]
+                    if a > 40:
+                        tot += (r + g + b); cnt += 1
+            return (tot / cnt) if cnt else 0.0
+
+        # 1. Sample brightness across the whole loop to find the median (the "normal"
+        #    state) — cheap: ~24 evenly-spaced probes, not all 300 frames.
+        probes = min(24, n)
+        probe_idxs = [round(i * (n - 1) / (probes - 1)) for i in range(probes)] if probes > 1 else [0]
+        samples = []
+        for i in probe_idxs:
+            try:
+                im.seek(i); samples.append((i, _brightness(im)))
+            except Exception:
+                pass
+        if not samples:
+            im.seek(0); return im.convert("RGBA")
+        med = sorted(s[1] for s in samples)[len(samples) // 2]
+
+        # 2. Target phase ~20% into the loop; scan a window there and pick the frame
+        #    whose brightness is nearest the median.
+        target = int(n * 0.20)
+        half = max(2, n // 20)                     # window ≈ 10% of the loop wide
+        lo, hi = max(0, target - half), min(n - 1, target + half)
+        best_i, best_score = None, None
+        for i in range(lo, hi + 1):
+            try:
+                im.seek(i)
+                score = abs(_brightness(im) - med)
+                if best_score is None or score < best_score:
+                    best_i, best_score = i, score
+            except Exception:
+                continue
+        if best_i is None:
+            best_i = target
+        im.seek(best_i)
         return im.convert("RGBA")
     except Exception:
         try:
+            im.seek(0)
             return im.convert("RGBA")
         except Exception:
-            return im
+            try:
+                return im.convert("RGBA")
+            except Exception:
+                return im
 import io
 
 # Fonts
