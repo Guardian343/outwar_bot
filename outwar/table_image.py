@@ -8,97 +8,26 @@ from PIL import Image, ImageDraw, ImageFont, ImageSequence
 
 def pick_item_frame(im: "Image.Image") -> "Image.Image":
     """
-    Return a clean, representative frame of an Outwar item/augment icon.
+    Return the first frame of an Outwar item/augment icon.
 
-    These icons are long looping animations (Ghostly is 300 frames; others differ —
-    210, etc.), so there's NO single "resting" frame: frame 0 is the dark trough and
-    the brightest frame is the shimmer peak. We target a consistent PHASE (~20% into
-    the loop, which held across items in real contact sheets) and, within a small
-    window there, pick the frame whose brightness is nearest the animation's MEDIAN —
-    the item in its normal state, dodging both the dark trough and the bright peak.
-
-    CRITICAL — coalescing: these GIFs store frames as partial deltas with a disposal
-    method. Jumping straight to a middle frame via seek() and converting leaves the
-    frame's changed pixels composited over a mis-cleared canvas — which rendered as
-    diagonal streaks across the Ghostly items. To fix that we COALESCE: advance from
-    frame 0 up to the target, compositing each frame onto a persistent RGBA canvas, so
-    the returned frame is the fully-built image the game shows. Static images pass
-    straight through.
+    Outwar item icons are animated GIFs, but we deliberately do NOT try to hunt out a
+    "best" frame. Investigation (and comparison with OWBot/Bloop) showed there is no
+    single clean item frame to find — some sets, like Ghostly, are a near-invisible
+    animated effect whose item only briefly materialises, so frame 0 is mostly the
+    background lines. OWBot simply opens the file and pastes what it gets (frame 0);
+    Bloop's Ghostly items therefore show background-only. We match that: take frame 0,
+    plain. This is simpler and consistent with how the reference bot renders, rather
+    than out-thinking a problem that isn't one. Static images pass through unchanged.
     """
     try:
-        n = getattr(im, "n_frames", 1)
-        if not getattr(im, "is_animated", False) or n <= 1:
-            return im.convert("RGBA")
-
-        # Coalesce: build up to frame `target` by compositing every frame from 0,
-        # honouring each frame's transparency. Returns a standalone RGBA image.
-        def _coalesce(target):
-            canvas = None
-            for i in range(0, target + 1):
-                im.seek(i)
-                frame = im.convert("RGBA")
-                if canvas is None:
-                    canvas = frame.copy()
-                else:
-                    # paste the frame's opaque pixels onto the running canvas
-                    canvas.alpha_composite(frame)
-            return canvas if canvas is not None else im.convert("RGBA")
-
-        def _brightness_of(rgba):
-            px = rgba.load(); w, h = rgba.size
-            step = max(1, min(w, h) // 16)
-            tot, cnt = 0.0, 0
-            for yy in range(0, h, step):
-                for xx in range(0, w, step):
-                    r, g, b, a = px[xx, yy]
-                    if a > 40:
-                        tot += (r + g + b); cnt += 1
-            return (tot / cnt) if cnt else 0.0
-
-        # 1. Median brightness across the loop. Sampling has to be coalesced too, or
-        #    the brightness readings come from the same streaky garbage. Coalescing
-        #    every probe from 0 is O(n²); instead walk the frames ONCE, compositing as
-        #    we go, and record brightness at evenly-spaced checkpoints.
-        probes = min(24, n)
-        checkpoints = set(round(i * (n - 1) / (probes - 1)) for i in range(probes)) if probes > 1 else {0}
-        canvas = None
-        samples = []          # (frame_index, brightness) at checkpoints
-        frame_cache = {}      # frame_index -> coalesced RGBA (only at checkpoints)
-        for i in range(0, n):
-            im.seek(i)
-            frame = im.convert("RGBA")
-            if canvas is None:
-                canvas = frame.copy()
-            else:
-                canvas.alpha_composite(frame)
-            if i in checkpoints:
-                snap = canvas.copy()
-                samples.append((i, _brightness_of(snap)))
-                frame_cache[i] = snap
-        if not samples:
-            im.seek(0); return im.convert("RGBA")
-        med = sorted(s[1] for s in samples)[len(samples) // 2]
-
-        # 2. Among the checkpoints within the ~20% phase window, pick the one whose
-        #    brightness is closest to the median. (Checkpoints are ~every n/24 frames,
-        #    fine-grained enough for a good representative pick without re-walking.)
-        target = int(n * 0.20)
-        half = max(2, n // 10)                     # window ≈ 20% of the loop wide
-        lo, hi = max(0, target - half), min(n - 1, target + half)
-        in_window = [(i, b) for (i, b) in samples if lo <= i <= hi]
-        if not in_window:
-            in_window = samples
-        best_i = min(in_window, key=lambda ib: abs(ib[1] - med))[0]
-        return frame_cache.get(best_i) or _coalesce(best_i)
+        if getattr(im, "is_animated", False):
+            im.seek(0)
+        return im.convert("RGBA")
     except Exception:
         try:
-            im.seek(0)
             return im.convert("RGBA")
         except Exception:
-            try:
-                return im.convert("RGBA")
-            except Exception:
-                return im
+            return im
 import io
 
 # Fonts
