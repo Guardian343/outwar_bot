@@ -102,6 +102,7 @@ CATEGORIES = {
         "emoji": "📊",
         "description": "Character stats, rankings and group info.",
         "commands": [
+            ("!profile <character>",             "Full profile card — stats, equipment paperdoll, crests, augments"),
             ("!who <character>",                 "Full stats, caps and rage for one character"),
             ("!compare <char1> <char2>",         "Compare two characters side by side"),
             ("!group-stats <group>",             "Power, ele, chaos and faction image for a group"),
@@ -206,13 +207,23 @@ CATEGORIES = {
         ]
     },
     "crawler": {
-        "title": "World Crawler",
+        "title": "World Map & Routing",
         "emoji": "🗺️",
-        "description": "Walk all accessible rooms and update map/mob data.",
+        "description": "Crawl the world, then search and route over the mapped data. "
+                       "Search/route commands are read-only — nothing moves.",
         "commands": [
-            ("!crawl <character>",               "Start crawling the world map as a character"),
+            ("!crawl <character>",               "Start crawling the world map as a character (from room 11)"),
             ("!crawl-stop",                      "Stop the running crawl"),
             ("!crawl-status",                    "Crawl progress — rooms visited, new rooms, new mobs"),
+            ("!find <name|room#>",               "Look up a mob/raid/NPC by name, or everything in a room"),
+            ("!zones",                           "List every mapped zone and its room count"),
+            ("!zone <name>",                     "Deep-dive a zone: raids, mobs, quest-givers, locked rooms"),
+            ("!locked [system]",                 "Key-locked rooms grouped by dungeon (Tower, Texts…); name one to expand"),
+            ("!locked-clean unknown|<rooms>",    "Purge false-positive locked-room entries"),
+            ("!route <from> <to>",               "Shortest walking route between two rooms (or mob/zone names)"),
+            ("!nearest [raids|mobs|npcs] from <room>", "Closest targets to a room by walking distance"),
+            ("!tour [raids|mobs] [from <room>]", "Order targets into an efficient tour (defaults from room 11)"),
+            ("!scan-keys [character]",           "Scan an account's Keys tab and report which items are teleporters + where they go"),
         ]
     },
 }
