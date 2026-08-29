@@ -2604,6 +2604,59 @@ class RaidCommands(commands.Cog):
         await ctx.send(f"🗡️ **{t['name']}** — needs **{len(needs)}** of {len(resolved)} "
                        f"(has {have}):\n{names}"[:1900])
 
+    @commands.command(name="slayer-status", aliases=["slayerstatus"])
+    async def slayer_status(self, ctx, character: str):
+        """Show an account's God-Slayer standing from the daily cache (level, how
+        many of the 63 daily gods slayed, and which are still needed). Reads the
+        3am-sweep cache — no live fetch. Falls back to a hint if not cached yet."""
+        from outwar import database as db
+        from outwar.scraper import resolve_slayer_targets
+        rec, sid, crew = db.get_account_slayer_status(character)
+        if not rec:
+            await ctx.send(f"No cached slayer status for **{character}** yet. "
+                           f"The nightly sweep runs at 3am UK, or run `!slayer-sweep` "
+                           f"to build it now.")
+            return
+        resolved, _ = resolve_slayer_targets()
+        daily_names = {r["name"].lower() for r in resolved}
+        slayed = {s.lower() for s in rec["slayed"]}
+        slayed_daily = daily_names & slayed
+        needs = [r for r in resolved if r["name"].lower() not in slayed]
+        import discord
+        embed = discord.Embed(
+            title=f"🗡️ God-Slayer status — {character}",
+            color=discord.Color.gold())
+        embed.add_field(name="God-Slayer Level", value=str(rec.get("level", "?")), inline=True)
+        embed.add_field(name="Daily gods slayed",
+                        value=f"{len(slayed_daily)} / {len(resolved)}", inline=True)
+        embed.add_field(name="Total gods slayed",
+                        value=str(len(rec["slayed"])), inline=True)
+        if needs:
+            names = ", ".join(r["alias"] for r in needs)
+            _add_field = names if len(names) <= 1024 else names[:1010] + "…"
+            embed.add_field(name=f"Still needs ({len(needs)})", value=_add_field, inline=False)
+        else:
+            embed.add_field(name="Daily targets", value="✅ All slayed!", inline=False)
+        crew_lbl = crew if crew and crew != "(no crew)" else "—"
+        embed.set_footer(text=f"Server {sid} · Crew {crew_lbl} · cached {rec.get('updated','?')}")
+        await ctx.send(embed=embed)
+
+    @commands.command(name="slayer-sweep", hidden=True)
+    async def slayer_sweep(self, ctx):
+        """Manually trigger the God-Slayer status sweep now (instead of waiting for
+        the 3am run). Scans every trustee and refreshes the cache."""
+        gm = self.bot.get_cog("GodMonitor")
+        if not gm or not hasattr(gm, "_sweep_slayer_status"):
+            await ctx.send("God monitor cog not available — can't run the sweep.")
+            return
+        await ctx.send("🗡️ Running God-Slayer status sweep across all trustees… "
+                       "(this reads every account's page, give it a moment)")
+        try:
+            await gm._sweep_slayer_status()
+            await ctx.send("✅ Slayer status cache refreshed. Try `!slayer-status <account>`.")
+        except Exception as e:
+            await ctx.send(f"⚠️ Sweep error: `{e}`")
+
     @commands.command(name="slayer-stop", aliases=["slayerstop"])
     async def slayer_stop(self, ctx):
         """Stop an in-progress slayer run after the current god."""

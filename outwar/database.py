@@ -656,6 +656,61 @@ def _write_dict(filename: str, data: dict):
 
 
 # ---------------------------------------------------------------------------
+# God-Slayer status cache — a daily snapshot of each account's slayed/missing
+# gods, refreshed by a 3am sweep so slayer runs (and !slayer-status) can read it
+# instantly instead of fetching every account's God Slayer page live.
+# Stored per server/crew: { "<server_id>": { "<crew>": { "<account>": {
+#     "level": int, "slayed": [god names], "updated": iso-timestamp } } } }
+# ---------------------------------------------------------------------------
+
+def get_slayer_status_cache() -> dict:
+    return _read_dict("slayer_status.json")
+
+
+def set_slayer_status(server_id: int, crew: str, account: str,
+                      level: int, slayed: list):
+    """Record one account's slayed gods + God-Slayer level under its server/crew."""
+    import datetime as _dt
+    cache = _read_dict("slayer_status.json")
+    sid = str(int(server_id))
+    crew = crew or "(no crew)"
+    cache.setdefault(sid, {}).setdefault(crew, {})[account] = {
+        "level": int(level or 0),
+        "slayed": sorted(set(slayed)),
+        "updated": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    _write_dict("slayer_status.json", cache)
+
+
+def mark_god_slayed(server_id: int, crew: str, account: str, god_name: str):
+    """Incrementally mark a god as slayed for an account (called when the bot itself
+    lands a win) so the cache stays fresh between daily sweeps."""
+    cache = _read_dict("slayer_status.json")
+    sid = str(int(server_id))
+    crew = crew or "(no crew)"
+    rec = cache.setdefault(sid, {}).setdefault(crew, {}).setdefault(
+        account, {"level": 0, "slayed": [], "updated": None})
+    if god_name not in rec["slayed"]:
+        rec["slayed"] = sorted(set(rec["slayed"]) | {god_name})
+        _write_dict("slayer_status.json", cache)
+
+
+def get_account_slayer_status(account: str):
+    """Look up one account's cached status across all servers/crews. Returns
+    (record, server_id, crew) or (None, None, None) if not cached yet."""
+    cache = _read_dict("slayer_status.json")
+    for sid, crews in cache.items():
+        for crew, accounts in crews.items():
+            if account in accounts:
+                return accounts[account], sid, crew
+            # case-insensitive fallback
+            for name, rec in accounts.items():
+                if name.lower() == account.lower():
+                    return rec, sid, crew
+    return None, None, None
+
+
+# ---------------------------------------------------------------------------
 # ?top-all exclusions — runtime-editable (was a hardcoded list in constants.py).
 # Bot/alt accounts that should never appear in the top-all rankings. Stored in
 # top_exclusions.json as {"names": [...], "substrings": [...]}. On first read the

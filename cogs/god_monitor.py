@@ -139,6 +139,7 @@ class GodMonitor(commands.Cog):
             self.boss_poll_loop.start()
             self.daily_summary_loop.start()
             self.session_check_loop.start()
+            self.slayer_status_loop.start()
             # Resume auto-leaderboard refresh if previously set up (tracked message IDs
             # exist), so a restart keeps editing the existing embeds on schedule.
             if db.get_settings().get("envoy_leaderboard_msgs"):
@@ -151,6 +152,10 @@ class GodMonitor(commands.Cog):
         self.boss_poll_loop.cancel()
         self.daily_summary_loop.cancel()
         self.session_check_loop.cancel()
+        try:
+            self.slayer_status_loop.cancel()
+        except Exception:
+            pass
         try:
             self.leaderboard_refresh_loop.cancel()
         except Exception:
@@ -288,6 +293,55 @@ class GodMonitor(commands.Cog):
     @daily_summary_loop.before_loop
     async def before_daily_summary(self):
         await self.bot.wait_until_ready()
+
+    @tasks.loop(minutes=1)
+    async def slayer_status_loop(self):
+        # Fire once at 03:00 UK time — a quiet-hours sweep of every account's
+        # God-Slayer page, caching slayed gods + level per server/crew so slayer
+        # runs and !slayer-status read the cache instead of fetching live.
+        import pytz
+        uk_tz = pytz.timezone("Europe/London")
+        now_uk = datetime.now(uk_tz)
+        if now_uk.hour == 3 and now_uk.minute == 0:
+            try:
+                await self._sweep_slayer_status()
+            except Exception as e:
+                logger.error("GOD_MONITOR", f"slayer status sweep failed: {e}")
+
+    @slayer_status_loop.before_loop
+    async def before_slayer_status(self):
+        await self.bot.wait_until_ready()
+
+    async def _sweep_slayer_status(self):
+        """Scan every trustee's God-Slayer page and cache slayed gods + level,
+        keyed per server/crew. Runs concurrently but gently (small semaphore)."""
+        from outwar.scraper import parse_god_slayer, parse_full_profile
+        trustees = [t for t in db.get_trustees() if t.get("suid")]
+        if not trustees:
+            return
+        logger.info("GOD_MONITOR", f"Slayer status sweep: {len(trustees)} accounts…")
+        sem = asyncio.Semaphore(6)
+
+        async def _one(t):
+            async with sem:
+                try:
+                    html = await self.session.get_as("profile", t["suid"])
+                    slayed = [g["name"] for g in parse_god_slayer(html)]
+                    # God-Slayer level from the same profile page.
+                    try:
+                        prof = parse_full_profile(html)
+                        level = int(prof.get("stats", {}).get("God Slayer Level", 0)
+                                    or prof.get("god_slayer", 0) or 0)
+                    except Exception:
+                        level = 0
+                    db.set_slayer_status(int(t.get("server_id", 1)),
+                                         t.get("crew", ""), t["name"], level, slayed)
+                except Exception as e:
+                    logger.warning("GOD_MONITOR",
+                                   f"slayer status: {t.get('name')} failed: {e}")
+
+        await asyncio.gather(*[_one(t) for t in trustees])
+        logger.info("GOD_MONITOR", "Slayer status sweep complete.")
 
     # ------------------------------------------------------------------
     # Startup state
