@@ -1294,20 +1294,18 @@ class CrawlerCommands(commands.Cog):
                 return
             start, start_label = s, sl
 
-        # Build the target list.
-        explicit_rooms = [int(t) for t in spec.split() if t.isdigit()]
+        # Build the target list. Three ways to specify targets:
+        #   • a category word ("raids"/"mobs"/"npcs") → every mob of that category
+        #   • a list of room numbers → just those rooms
+        #   • a list of NAMES → resolve each to its room (e.g. "!tour villax thanox")
         room_mob = {}
-        if explicit_rooms:
-            targets = set(explicit_rooms)
-            for m in mobs.values():
-                for rid in m.get("rooms", []):
-                    if int(rid) in targets:
-                        room_mob.setdefault(int(rid), m.get("name", "?"))
-        else:
-            # category spec (first word if it's a category, else default raids)
-            w = spec.split()[0].lower() if spec.split() else ""
-            if w in cat_map:
-                cat = cat_map[w]
+        tokens = spec.split()
+        first = tokens[0].lower() if tokens else ""
+        explicit_rooms = [int(t) for t in tokens if t.isdigit()]
+
+        if first in cat_map and not any(t.isdigit() for t in tokens):
+            # Category tour — every mob of that category.
+            cat = cat_map[first]
             targets = set()
             for m in mobs.values():
                 if (m.get("category") or "attack") != cat:
@@ -1319,28 +1317,107 @@ class CrawlerCommands(commands.Cog):
                 label = {"raid": "raids", "attack": "attackable mobs", "talk": "quest-givers"}[cat]
                 await ctx.send(f"No {label} in the crawl DB yet — run a crawl first.")
                 return
+        elif explicit_rooms and len(explicit_rooms) == len(tokens):
+            # Pure room-number list.
+            targets = set(explicit_rooms)
+            for m in mobs.values():
+                for rid in m.get("rooms", []):
+                    if int(rid) in targets:
+                        room_mob.setdefault(int(rid), m.get("name", "?"))
+        elif not spec.strip():
+            # No spec at all → default: all raids.
+            cat = "raid"
+            targets = set()
+            for m in mobs.values():
+                if (m.get("category") or "attack") != "raid":
+                    continue
+                for rid in m.get("rooms", []):
+                    targets.add(int(rid))
+                    room_mob.setdefault(int(rid), m.get("name", "?"))
+        else:
+            # NAME list — resolve each token/phrase to a mob room. Names can be single
+            # words ("villax") — we match each token as a substring against mob names.
+            targets = set()
+            unresolved = []
+            for tok in tokens:
+                if tok.isdigit():
+                    rid = int(tok)
+                    targets.add(rid)
+                    for m in mobs.values():
+                        if rid in [int(r) for r in m.get("rooms", [])]:
+                            room_mob.setdefault(rid, m.get("name", "?")); break
+                    continue
+                tl = tok.lower()
+                hit = None
+                for m in mobs.values():
+                    if tl in m.get("name", "").lower() and m.get("rooms"):
+                        hit = m; break
+                if hit:
+                    rid = int(hit["rooms"][0])
+                    targets.add(rid)
+                    room_mob.setdefault(rid, hit.get("name", "?"))
+                else:
+                    unresolved.append(tok)
+            if unresolved:
+                await ctx.send("🔎 Couldn't find " +
+                               ", ".join(f"**{u}**" for u in unresolved) +
+                               " in the crawl DB. Check spelling, or use room numbers.")
+                return
 
         if not targets:
             await ctx.send("No valid targets to tour.")
             return
 
-        # Greedy nearest-neighbour: repeatedly hop to the closest unvisited target.
+        # ---- Zone-clustered greedy ordering ----
+        # Pure nearest-neighbour over 100+ scattered raids zig-zags badly: it strands
+        # far targets and makes huge leaps back. Raids cluster heavily by zone, so we
+        # tour ZONE BY ZONE — pick the nearest zone, clear all its raids (greedily
+        # within), then hop to the next nearest zone. This kills the cross-map bounce.
         remaining = set(targets)
-        remaining.discard(start)          # if start is itself a target, count it visited
-        cur = start
-        legs = []                          # (room, mob_name, hops_this_leg)
+        remaining.discard(start)
+        if not remaining:
+            await ctx.send(f"🚫 No targets to tour (start is the only one).")
+            return
+
+        # Group remaining targets by zone (rooms with no known zone get their own bucket).
+        zone_of = {rid: (room_zones.get(str(rid)) or f"(room {rid})") for rid in remaining}
+        by_zone = {}
+        for rid in remaining:
+            by_zone.setdefault(zone_of[rid], set()).add(rid)
+
+        legs = []
         total = 0
+        cur = start
         unreachable = []
-        while remaining:
-            nxt = bfs_nearest(cur, remaining, limit=1)
+        zones_left = set(by_zone.keys())
+
+        while zones_left:
+            # Find the nearest room in ANY remaining zone from the current position;
+            # that room's zone becomes the next zone to fully clear.
+            all_remaining = set().union(*(by_zone[z] for z in zones_left))
+            nxt = bfs_nearest(cur, all_remaining, limit=1)
             if not nxt:
-                unreachable = sorted(remaining)
+                unreachable = sorted(all_remaining)
                 break
-            rid, dist = nxt[0]
-            legs.append((rid, room_mob.get(rid, "?"), dist))
-            total += dist
-            cur = rid
-            remaining.discard(rid)
+            entry_room, entry_dist = nxt[0]
+            zone = zone_of[entry_room]
+            # Enter the zone.
+            legs.append((entry_room, room_mob.get(entry_room, "?"), entry_dist, zone))
+            total += entry_dist
+            cur = entry_room
+            zone_targets = by_zone[zone] - {entry_room}
+            # Greedily clear the rest of this zone before leaving it.
+            while zone_targets:
+                nz = bfs_nearest(cur, zone_targets, limit=1)
+                if not nz:
+                    unreachable.extend(sorted(zone_targets))
+                    break
+                rid, dist = nz[0]
+                legs.append((rid, room_mob.get(rid, "?"), dist, zone))
+                total += dist
+                cur = rid
+                zone_targets.discard(rid)
+            zones_left.discard(zone)
 
         if not legs:
             await ctx.send(f"🚫 No reachable targets from **{start_label}**.")
@@ -1352,11 +1429,14 @@ class CrawlerCommands(commands.Cog):
         lines = [header, f"_Reach the start instantly via the room-11 teleport._"
                  if start == RESET_ROOM else ""]
         running = 0
-        for i, (rid, name, dist) in enumerate(legs, 1):
+        last_zone = None
+        for i, (rid, name, dist, zone) in enumerate(legs, 1):
             running += dist
-            zone = room_zones.get(str(rid))
+            # Header a new zone as we enter it, so the tour reads as grouped legs.
+            if zone != last_zone:
+                lines.append(f"__{zone}__")
+                last_zone = zone
             lines.append(f"{i}. {icon} **{name}** — room {rid}"
-                         + (f" ({zone})" if zone else "")
                          + f" — {dist} hop{'s' if dist != 1 else ''} (cum {running})")
         if unreachable:
             lines.append(f"\n⚠️ Couldn't reach {len(unreachable)} target(s) by walking "
