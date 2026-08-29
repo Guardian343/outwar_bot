@@ -1240,15 +1240,17 @@ class CrawlerCommands(commands.Cog):
     @commands.command(name="tour")
     async def tour_cmd(self, ctx, *, query: str = ""):
         """
-        Order a set of raid targets into an efficient walking tour using greedy
-        nearest-neighbour — the fix for zig-zagging between gods in listed order.
-          !tour                     → all raids, starting from room 11 (the teleport anchor)
-          !tour raids from 11       → same, explicit
-          !tour mobs from Rillax    → tour attackable mobs starting at Rillax's room
-          !tour 30 60 90            → order just these rooms, from room 11
-          !tour 30 60 90 from 11    → order these rooms from a given start
-        Greedy: from the start, go to the nearest target, then the nearest unvisited
-        from there, and so on. Pure graph maths — nothing moves.
+        Order a set of raid targets into an efficient walking tour, clustered by zone
+        to avoid zig-zagging between gods.
+          !tour slayer              → the daily God-Slayer gods only (your daily-raid set)
+          !tour villax thanox       → just the gods you name
+          !tour                     → ALL raids (171 — includes primes + quest raids)
+          !tour raids from 11       → same as above, explicit start
+          !tour mobs from Rillax    → tour attackable mobs from Rillax's room
+          !tour 30 60 90            → order just these rooms
+        Tip: `!tour slayer` is usually what you want for daily raiding — `!tour` with
+        no args tours every raid in the world, which is a lot. Pure graph maths;
+        nothing moves.
         """
         from outwar.scraper import bfs_nearest, find_path
         q = query.strip()
@@ -1294,7 +1296,8 @@ class CrawlerCommands(commands.Cog):
                 return
             start, start_label = s, sl
 
-        # Build the target list. Three ways to specify targets:
+        # Build the target list. Ways to specify targets:
+        #   • "slayer" → only the daily God-Slayer gods (the real daily-raid set)
         #   • a category word ("raids"/"mobs"/"npcs") → every mob of that category
         #   • a list of room numbers → just those rooms
         #   • a list of NAMES → resolve each to its room (e.g. "!tour villax thanox")
@@ -1303,7 +1306,23 @@ class CrawlerCommands(commands.Cog):
         first = tokens[0].lower() if tokens else ""
         explicit_rooms = [int(t) for t in tokens if t.isdigit()]
 
-        if first in cat_map and not any(t.isdigit() for t in tokens):
+        if first == "slayer" or first == "slayers":
+            # Daily God-Slayer gods only — the curated daily-raid set (~56 gods),
+            # NOT the 171 raids (which include primes and quest raids). Uses the same
+            # target list the slayer raiding system uses.
+            from outwar.scraper import resolve_slayer_targets
+            resolved, unresolved = resolve_slayer_targets()
+            if not resolved:
+                await ctx.send("Couldn't resolve the daily slayer gods — is the "
+                               "reference mob list loaded?")
+                return
+            cat = "raid"
+            targets = set()
+            for g in resolved:
+                rid = int(g["room"])
+                targets.add(rid)
+                room_mob.setdefault(rid, g["name"])
+        elif first in cat_map and not any(t.isdigit() for t in tokens):
             # Category tour — every mob of that category.
             cat = cat_map[first]
             targets = set()

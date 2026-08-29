@@ -1726,32 +1726,32 @@ def load_reference_mobs():
     return _reference_mobs
 
 
+# Daily God-Slayer gods (63) — the world gods that spawn DAILY, used for
+# God Slayer levels. This is the full 114 God Slayer roster MINUS the 51
+# Prime gods (cycle-based, handled by the prime watcher). Derived by diffing
+# the game's God Slayer page against the prime list.
 SLAYER_TARGETS = {
-    "gnorb": "Gnorb", "nessam": "Nessam", "crane": "Crane",
-    "wanh": "Wanhiroeaz the Devourer", "pinosis": "Pinosis", "tsort": "Tsort",
-    "shadow": "Shadow", "xordam": "Lord Xordam", "mistress": "Mistress of the Sword",
-    "hyrak": "Hyrak, Bringer of Nightmares", "ariella": "Lady Ariella",
-    "vitkros": "Vitkros, Hydra of the Deep", "trax": "Traxodon the Plaguebringer",
-    "ganeshan": "Great Lord Ganeshan", "suka": "Lord Suka", "narada": "Lord Narada",
-    "varan": "Lord Varan", "smoot": "Smoot the Yeti",
-    "dreg": "Dreg nor, Keeper of the Infernal Essence", "sib": "Lord Sibannac",
-    "ash": "King Ashnar, Lord of the Unliving", "emerald": "The Emerald Assassin",
-    "murder": "Murderface", "anguish": "Anguish", "samatha": "Samatha Dark-Soul",
-    "detox": "Detox", "tylos": "Tylos, The Lord Master", "threk": "Threk, King of Lords",
-    "jazzmin": "Jazzmin, Maiden of Vitality", "garland": "Garland, The Lord Keeper",
-    "sigil": "Sigil, Lich of Woe", "terrance": "Terrance, Rebel of Rallis",
-    "synge": "Synge, The Red Dragon", "rancid": "Rancid, Lord of Thugs",
-    "quiver": "Quiver, The Renegade", "zertan": "Zertan, The Collector",
-    "ebliss": "Ebliss, Fallen Angel of Despair", "wind": "Windstrike The Vile",
-    "skybrine": "Skybrine The Inescapable", "brut": "Brutalitar, Lord of the Underworld",
-    "grizzly": "Bloodchill the Grizzly", "ganja": "Ganja the Stone Golem",
-    "kro": "Kro Shuk, Doomslayer", "nabak": "Ag Nabak the Abomination",
-    "nar": "Nar Zhul, Slayer of All", "baron": "Baron Mu, Dark Rider of the Undead",
-    "melt": "Melt Bane, The Forbidden Demon Dragon", "rot": "Rotborn, Eater of the Dead",
-    "freeze": "Freezebreed, The Frozen Manipulator", "hacker": "Hackerphage, Protector of the Gateway",
-    "jade": "Jade Dragonite", "drake": "Old World Drake", "captain": "Animated Captain",
-    "crantos": "Crantos, Defender of Ultimation", "varsanor": "Varsanor, Master of Darkness",
-    "grivvek": "Grivvek, Protector of the Brood",
+    "nabak": "Ag Nabak the Abomination", "anguish": "Anguish", "captain": "Animated Captain",
+    "baron": "Baron Mu, Dark Rider of the Undead", "beastcards": "Beast of Cards", "grizzly": "Bloodchill the Grizzly",
+    "brut": "Brutalitar, Lord of the Underworld", "crane": "Crane", "crantos": "Crantos, Defender of Ultimation",
+    "detox": "Detox", "dreg": "Dreg nor, Keeper of the Infernal Essence", "ebliss": "Ebliss, Fallen Angel of Despair",
+    "neudeus": "Emperor Neudeus, Controller of the Universe", "freeze": "Freezebreed, The Frozen Manipulator", "ganja": "Ganja the Stone Golem",
+    "garland": "Garland, The Lord Keeper", "gnorb": "Gnorb", "ganeshan": "Great Lord Ganeshan",
+    "grivvek": "Grivvek, Protector of the Brood", "hacker": "Hackerphage, Protector of the Gateway", "howldroid": "Howldroid, Tormentor of the Pit",
+    "hyrak": "Hyrak, Bringer of Nightmares", "jade": "Jade Dragonite", "jazzmin": "Jazzmin, Maiden of Vitality",
+    "ash": "King Ashnar, Lord of the Unliving", "kro": "Kro Shuk, Doomslayer", "ariella": "Lady Ariella",
+    "ladychaos": "Lady Chaos, Queen of the Abyss", "narada": "Lord Narada", "sib": "Lord Sibannac",
+    "suka": "Lord Suka", "varan": "Lord Varan", "xordam": "Lord Xordam",
+    "melt": "Melt Bane, The Forbidden Demon Dragon", "mistress": "Mistress of the Sword", "murderface": "Murderface",
+    "nar": "Nar Zhul, Slayer of All", "nessam": "Nessam", "noxious": "Noxious Slug",
+    "numerocure": "Numerocure, The Black Messenger of Evil", "drake": "Old World Drake", "pinosis": "Pinosis",
+    "quiver": "Quiver, The Renegade", "rancid": "Rancid, Lord of Thugs", "rot": "Rotborn, Eater of the Dead",
+    "samatha": "Samatha Dark-Soul", "shadow": "Shadow", "sigil": "Sigil, Lich of Woe",
+    "skybrine": "Skybrine The Inescapable", "slashbrood": "Slashbrood, Devourer of the Blackness", "smoot": "Smoot the Yeti",
+    "synge": "Synge, The Red Dragon", "terrance": "Terrance, Rebel of Rallis", "emerald": "The Emerald Assassin",
+    "threk": "Threk, King of Lords", "trax": "Traxodon the Plaguebringer", "tsort": "Tsort",
+    "tylos": "Tylos, The Lord Master", "varsanor": "Varsanor, Master of Darkness", "vitkros": "Vitkros, Hydra of the Deep",
+    "wanh": "Wanhiroeaz the Devourer", "wind": "Windstrike The Vile", "zertan": "Zertan, The Collector",
 }
 
 
