@@ -2083,6 +2083,14 @@ class RaidCommands(commands.Cog):
         if not sorted_trustees:
             return False, 0, None
 
+        # --- Phase timing (read by the slayer loop after each god to find where time
+        #     goes: walking vs forming vs joining). Stored on self to avoid changing
+        #     the (won, dmg, note) return shape used by many call sites. ---
+        import time as _time
+        _t = {"walk": 0.0, "form": 0.0, "join": 0.0, "total": 0.0}
+        _t0_total = _time.monotonic()
+        self._last_raid_timing = _t
+
         try:
             from outwar.scraper import find_path
             nav_semaphore = asyncio.Semaphore(10)
@@ -2160,6 +2168,7 @@ class RaidCommands(commands.Cog):
                     except Exception as e:
                         logger.warning("RAID", f"Navigation error for {t.get('name')}: {e}")
 
+            _tw = _time.monotonic()
             for candidate in sorted_trustees:
                 await _navigate(candidate, try_as_former=True)
                 if form_url:
@@ -2168,9 +2177,11 @@ class RaidCommands(commands.Cog):
                 # mob isn't there -> it's dead/not spawned. Skip immediately instead
                 # of walking every account to an empty room.
                 if room_reached and not god_seen:
+                    _t["walk"] += _time.monotonic() - _tw
                     return False, 0, "not spawned"
 
             if not form_url:
+                _t["walk"] += _time.monotonic() - _tw
                 # Reached the god but couldn't form -> spawned but capped/full.
                 if god_seen:
                     return False, 0, "capped — could not form"
@@ -2179,8 +2190,10 @@ class RaidCommands(commands.Cog):
 
             others = [t for t in sorted_trustees if t.get("suid") != former_suid]
             await asyncio.gather(*[_navigate(t, try_as_former=False) for t in others])
+            _t["walk"] += _time.monotonic() - _tw
 
             # Form (as former, per-request cookie)
+            _tf = _time.monotonic()
             await session.post_as(form_url, {
                 "formtime": "2", "submit": "Join this Raid!", "bomb": "none"
             }, former_suid)
@@ -2220,6 +2233,8 @@ class RaidCommands(commands.Cog):
                     logger.warning("SLAYER", f"Join-limit learn error for {mob['name']}: {_e}")
 
             # Join concurrently
+            _t["form"] += _time.monotonic() - _tf
+            _tj = _time.monotonic()
             join_semaphore = asyncio.Semaphore(10)
             joiners = [t for t in sorted_trustees if t.get("suid") and t.get("suid") != former_suid]
 
@@ -2278,6 +2293,8 @@ class RaidCommands(commands.Cog):
                     raw_drops = _re.sub(r"<br\s*/?>", ", ", raw_drops, flags=_re.IGNORECASE)
                     drops = _re.sub(r"<[^>]+>", "", raw_drops).strip().strip(",")
 
+            _t["join"] += _time.monotonic() - _tj
+            _t["total"] = _time.monotonic() - _t0_total
             return won, damage, drops
 
         except Exception as e:
@@ -2649,6 +2666,9 @@ class RaidCommands(commands.Cog):
 
         results = []
         wins = 0
+        _timing_totals = {"walk": 0.0, "form": 0.0, "join": 0.0, "total": 0.0}
+        import time as _time
+        _run_start = _time.monotonic()
         join_limits = db.get_join_limits()   # learned min/max joiners per god
         from outwar.scraper import size_slayer_roster
         for i, (tgt, needers) in enumerate(plan, 1):
@@ -2671,6 +2691,11 @@ class RaidCommands(commands.Cog):
                 won, dmg, note = await self._do_world_raid(roster, mob)
             except Exception as e:
                 won, dmg, note = False, 0, f"error: {e}"
+            # Accumulate phase timing captured by _do_world_raid (walk/form/join).
+            _gt = getattr(self, "_last_raid_timing", None)
+            if _gt:
+                for k in _timing_totals:
+                    _timing_totals[k] += _gt.get(k, 0.0)
             # Refresh learned limits in case _do_world_raid just learned this god's.
             if tgt["alias"] not in join_limits:
                 _fresh = db.get_join_limits().get(tgt["alias"])
@@ -2694,6 +2719,20 @@ class RaidCommands(commands.Cog):
 
         lines = [f"Slayer run — {crew}  ({'all' if mode.lower()=='all' else 'needers'})",
                  f"Gods raided: {len(results)} · Wins: {wins}", ""]
+        # Timing breakdown — where the run's time actually went. Wall-clock is the real
+        # elapsed; the phase sums are cumulative across gods (walk is the suspected cost).
+        _wall = _time.monotonic() - _run_start
+        def _mmss(s):
+            m, s = divmod(int(s), 60)
+            return f"{m}m {s:02d}s"
+        lines += [
+            f"⏱️ Wall-clock: {_mmss(_wall)}",
+            f"   walk: {_mmss(_timing_totals['walk'])}  ·  "
+            f"form: {_mmss(_timing_totals['form'])}  ·  "
+            f"join: {_mmss(_timing_totals['join'])}",
+            f"   avg per god: {_mmss(_wall / max(1, len(results)))}",
+            "",
+        ]
         for alias, won, nd, dmg, note in results:
             tag = "WIN " if won else "miss"
             lines.append(f"{alias:<10} {tag}  needers:{nd:<3} dmg:{dmg:>12,}  {note or ''}".rstrip())
