@@ -314,28 +314,40 @@ class GodMonitor(commands.Cog):
 
     async def _sweep_slayer_status(self):
         """Scan every trustee's God-Slayer page and cache slayed gods + level,
-        keyed per server/crew. Runs concurrently but gently (small semaphore)."""
+        keyed per server/crew. Runs concurrently but gently (small semaphore).
+        The God-Slayer profile block lists BOTH world gods and primes, so we split
+        the slayed set against the known prime list to track prime progress too."""
         from outwar.scraper import parse_god_slayer, parse_full_profile
         trustees = [t for t in db.get_trustees() if t.get("suid")]
         if not trustees:
             return
+        # Current prime god names (dynamic, from the live-populated prime list).
+        prime_names = {g.get("name", "").lower()
+                       for g in db.get_prime_gods() if g.get("name")}
         logger.info("GOD_MONITOR", f"Slayer status sweep: {len(trustees)} accounts…")
         sem = asyncio.Semaphore(6)
+
+        def _extract_level(prof):
+            # The stats dict keys are the raw profile labels; find the god-slayer row
+            # case-insensitively and strip any thousands separators from the value.
+            for label, value in (prof.get("stats") or {}).items():
+                if "god slayer" in label.lower():
+                    digits = "".join(ch for ch in str(value) if ch.isdigit())
+                    return int(digits) if digits else 0
+            return int(prof.get("god_slayer", 0) or 0)
 
         async def _one(t):
             async with sem:
                 try:
                     html = await self.session.get_as("profile", t["suid"])
                     slayed = [g["name"] for g in parse_god_slayer(html)]
-                    # God-Slayer level from the same profile page.
                     try:
-                        prof = parse_full_profile(html)
-                        level = int(prof.get("stats", {}).get("God Slayer Level", 0)
-                                    or prof.get("god_slayer", 0) or 0)
+                        level = _extract_level(parse_full_profile(html))
                     except Exception:
                         level = 0
                     db.set_slayer_status(int(t.get("server_id", 1)),
-                                         t.get("crew", ""), t["name"], level, slayed)
+                                         t.get("crew", ""), t["name"],
+                                         level, slayed, prime_names)
                 except Exception as e:
                     logger.warning("GOD_MONITOR",
                                    f"slayer status: {t.get('name')} failed: {e}")

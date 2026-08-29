@@ -2631,6 +2631,18 @@ class RaidCommands(commands.Cog):
                         value=f"{len(slayed_daily)} / {len(resolved)}", inline=True)
         embed.add_field(name="Total gods slayed",
                         value=str(len(rec["slayed"])), inline=True)
+        # Prime god track (primes share the God-Slayer block; the sweep splits them out).
+        if "primes_total" in rec:
+            p_slayed = len(rec.get("primes_slayed", []))
+            p_total = rec.get("primes_total", 0)
+            embed.add_field(name="Primes slayed",
+                            value=f"{p_slayed} / {p_total}", inline=True)
+            missing_p = rec.get("primes_missing", [])
+            if missing_p:
+                pm = ", ".join(missing_p)
+                embed.add_field(name=f"Primes still needed ({len(missing_p)})",
+                                value=(pm if len(pm) <= 1024 else pm[:1010] + "…"),
+                                inline=False)
         if needs:
             names = ", ".join(r["alias"] for r in needs)
             _add_field = names if len(names) <= 1024 else names[:1010] + "…"

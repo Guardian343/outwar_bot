@@ -668,17 +668,30 @@ def get_slayer_status_cache() -> dict:
 
 
 def set_slayer_status(server_id: int, crew: str, account: str,
-                      level: int, slayed: list):
-    """Record one account's slayed gods + God-Slayer level under its server/crew."""
+                      level: int, slayed: list, prime_names: set = None):
+    """Record one account's slayed gods + God-Slayer level under its server/crew.
+    The slayed list contains BOTH world gods and primes (they share the God-Slayer
+    profile block), so if prime_names is given we also record how many primes are
+    slayed and which remain — a separate track from the daily world gods."""
     import datetime as _dt
     cache = _read_dict("slayer_status.json")
     sid = str(int(server_id))
     crew = crew or "(no crew)"
-    cache.setdefault(sid, {}).setdefault(crew, {})[account] = {
+    slayed_set = set(slayed)
+    rec = {
         "level": int(level or 0),
-        "slayed": sorted(set(slayed)),
+        "slayed": sorted(slayed_set),
         "updated": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     }
+    if prime_names:
+        pn = {p.lower() for p in prime_names}
+        slayed_primes = sorted(s for s in slayed_set if s.lower() in pn)
+        missing_primes = sorted(p for p in prime_names
+                                if p.lower() not in {s.lower() for s in slayed_set})
+        rec["primes_slayed"] = slayed_primes
+        rec["primes_total"] = len(prime_names)
+        rec["primes_missing"] = missing_primes
+    cache.setdefault(sid, {}).setdefault(crew, {})[account] = rec
     _write_dict("slayer_status.json", cache)
 
 
