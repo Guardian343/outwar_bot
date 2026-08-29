@@ -1755,6 +1755,57 @@ SLAYER_TARGETS = {
 }
 
 
+def order_rooms_by_proximity(rooms: list, start: int = 11) -> list:
+    """Order a list of room IDs into an efficient visiting sequence using greedy
+    nearest-neighbour over the REAL map graph (BFS distances), clustered by zone so
+    nearby gods are cleared together. Starts from `start` (room 11 = the universal
+    teleport anchor by default). Rooms the graph can't reach are appended at the end
+    in their original order.
+
+    This replaces the old Areas.txt-based sort, which mis-ordered because Areas.txt
+    is incomplete (doesn't cover the Dimension zones) — gods in uncovered rooms fell
+    into a catch-all bucket and split clusters, causing the observed zig-zag (raid a
+    god, leave the area, come back for one 2-3 rooms away).
+    """
+    import json as _json, os as _os
+    rooms = [int(r) for r in rooms if r]
+    if len(rooms) <= 1:
+        return rooms
+
+    # Load room -> zone (from the crawl); rooms with no zone get a per-room bucket.
+    zpath = _os.path.join(_os.path.dirname(__file__), "..", "database", "room_zones.json")
+    try:
+        room_zones = _json.load(open(zpath, encoding="utf-8"))
+    except Exception:
+        room_zones = {}
+
+    remaining = set(rooms)
+    zone_of = {r: (room_zones.get(str(r)) or f"__room_{r}") for r in remaining}
+    ordered = []
+    cur = start
+
+    # Greedy: repeatedly find the nearest remaining room; when we enter its zone,
+    # clear all of that zone's remaining rooms before moving on.
+    while remaining:
+        nxt = bfs_nearest(cur, remaining, limit=1)
+        if not nxt:
+            # Unreachable from here — append the rest in original order and stop.
+            ordered.extend([r for r in rooms if r in remaining])
+            break
+        entry, _ = nxt[0]
+        zone = zone_of[entry]
+        ordered.append(entry); remaining.discard(entry); cur = entry
+        # clear the rest of this zone greedily
+        zone_rooms = {r for r in remaining if zone_of[r] == zone}
+        while zone_rooms:
+            nz = bfs_nearest(cur, zone_rooms, limit=1)
+            if not nz:
+                break
+            r2, _ = nz[0]
+            ordered.append(r2); remaining.discard(r2); zone_rooms.discard(r2); cur = r2
+    return ordered
+
+
 def resolve_slayer_targets():
     """Return [{"alias", "name", "room", "mob_id"}] for every daily slayer god,
     plus a list of any that couldn't be resolved against Mobs.txt."""

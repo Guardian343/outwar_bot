@@ -2630,14 +2630,18 @@ class RaidCommands(commands.Cog):
             if mode.lower() == "all" or needers:
                 plan.append((tgt, needers))
 
-        # Route-ordering: group gods by area so clusters (e.g. the Foundry gods)
-        # get cleared together instead of zig-zagging across the map and back.
-        # Accounts navigate from their current room, so proximity ordering cuts
-        # real walking. Gods whose room isn't in Areas.txt sort to the end.
-        from outwar.scraper import room_to_area_map
-        _area = room_to_area_map()
-        plan.sort(key=lambda p: (_area.get(int(p[0].get("room", 0) or 0), 10**9),
-                                 int(p[0].get("room", 0) or 0)))
+        # Route-ordering: order gods by REAL walking proximity over the crawled map
+        # graph (greedy nearest-neighbour, zone-clustered, from the room-11 anchor),
+        # so nearby gods are cleared together. This replaces the old Areas.txt sort,
+        # which zig-zagged because Areas.txt is incomplete — gods in uncovered rooms
+        # (e.g. the Dimensions) fell into a catch-all bucket and split clusters.
+        from outwar.scraper import order_rooms_by_proximity
+        _room_of = {int(p[0].get("room", 0) or 0): p for p in plan}
+        _ordered_rooms = order_rooms_by_proximity(list(_room_of.keys()), start=11)
+        # Rebuild plan in the proximity order; any god whose room somehow dropped out
+        # (0/None) is appended so nothing is silently lost.
+        plan = [_room_of[r] for r in _ordered_rooms if r in _room_of]
+        plan += [p for p in _room_of.values() if p not in plan]
 
         await msg.edit(content=f"🗡️ **Slayer — {crew}**: raiding {len(plan)} gods "
                                f"({'all' if mode.lower()=='all' else 'with needers'})… "
