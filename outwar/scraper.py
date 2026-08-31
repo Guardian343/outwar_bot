@@ -1726,6 +1726,128 @@ def load_reference_mobs():
     return _reference_mobs
 
 
+# The definitive 114-god God Slayer roster (from the game's God Slayer page).
+# The daily gods are SLAYER_TARGETS (63); the God-Slayer PRIMES are the
+# remaining 51 (roster minus daily). NOTE: this is NOT the same as the live
+# prime-watcher list (prime_gods.json), which also contains EVENT primes like
+# 'Zhulian Friar' that are not part of God Slayer — using that list for the
+# split broke the maths. This roster is the single source of truth.
+GOD_SLAYER_ROSTER = [
+    "Ebliss, Fallen Angel of Despair",
+    "Brutalitar, Lord of the Underworld",
+    "Dreg nor, Keeper of the Infernal Essence",
+    "King Ashnar, Lord of the Unliving",
+    "Nar Zhul, Slayer of All",
+    "Great Lord Ganeshan",
+    "Lady Ariella",
+    "Lord Narada",
+    "Lord Suka",
+    "Lord Varan",
+    "Synge, The Red Dragon",
+    "Rancid, Lord of Thugs",
+    "Terrance, Rebel of Rallis",
+    "Zertan, The Collector",
+    "Quiver, The Renegade",
+    "Garland, The Lord Keeper",
+    "Tylos, The Lord Master",
+    "Jazzmin, Maiden of Vitality",
+    "Sigil, Lich of Woe",
+    "Ganja the Stone Golem",
+    "Lord Sibannac",
+    "Smoot the Yeti",
+    "Bloodchill the Grizzly",
+    "Ag Nabak the Abomination",
+    "Wanhiroeaz the Devourer",
+    "Vitkros, Hydra of the Deep",
+    "Hyrak, Bringer of Nightmares",
+    "Mistress of the Sword",
+    "Traxodon the Plaguebringer",
+    "Kro Shuk, Doomslayer",
+    "Murderface",
+    "The Emerald Assassin",
+    "Detox",
+    "Samatha Dark-Soul",
+    "Anguish",
+    "Threk, King of Lords",
+    "Crane",
+    "Gnorb",
+    "Nessam",
+    "Pinosis",
+    "Shadow",
+    "Tsort",
+    "Lord Xordam",
+    "Skybrine The Inescapable",
+    "Windstrike The Vile",
+    "Emperor Neudeus, Controller of the Universe",
+    "Slashbrood, Devourer of the Blackness",
+    "Howldroid, Tormentor of the Pit",
+    "Hackerphage, Protector of the Gateway",
+    "Numerocure, The Black Messenger of Evil",
+    "Lady Chaos, Queen of the Abyss",
+    "Rotborn, Eater of the Dead",
+    "Melt Bane, The Forbidden Demon Dragon",
+    "Baron Mu, Dark Rider of the Undead",
+    "Freezebreed, The Frozen Manipulator",
+    "Sylvanna TorLai",
+    "Lacuste of the Swarm",
+    "Anvilfist",
+    "Gorganus of the Wood",
+    "Ormsul the Putrid",
+    "Old World Drake",
+    "Animated Captain",
+    "Beast of Cards",
+    "Noxious Slug",
+    "Q-SEC Commander",
+    "Jade Dragonite",
+    "Varsanor, Master of Darkness",
+    "Grivvek, Protector of the Brood",
+    "Crantos, Defender of Ultimation",
+    "Kretok, Descendant of Nature",
+    "Felroc, Overseer of Hellfire",
+    "Karvaz, Lord of Alsayic",
+    "Sarcrina the Astral Priestess",
+    "Ancient Magus Tarkin",
+    "Jorun the Blazing Swordsman",
+    "Volgan the Living Ironbark",
+    "Zikkir the Dark Archer",
+    "Amalgamated Apparition",
+    "Nayark the Mummified Sorcerer",
+    "Akkel the Enflamed Warrior",
+    "Keeper of Nature",
+    "Archdevil Yirkon",
+    "Bolkor, the Holy Master",
+    "Xynak, the Arcane Master",
+    "Crolvak, the Fire Master",
+    "Esquin, the Kinetic Master",
+    "Raiyar, the Shadow Master",
+    "Nafir, God of Desolation",
+    "Skarthul the Avenged",
+    "Straya, the Underworld Ruler",
+    "Dlanod, the Crazed Chancellor",
+    "Viserion, the Necrodragon",
+    "Balerion, Dragon of Dread",
+    "Dexor, Victor of Veldara",
+    "Gregov, Knight of the Woods",
+    "Murfax, Beast of the Caves",
+    "Thanox, Balancer of Chaos",
+    "Rillax, Twin of Wisdom",
+    "Villax, Twin of Strength",
+    "Holgor, the Holy Deity",
+    "Arcon, the Arcane Deity",
+    "Firan, the Fire Deity",
+    "Kinark, the Kinetic Deity",
+    "Shayar, the Shadow Deity",
+    "Agnar, Astral Betrayer",
+    "Valzek, Harbinger of Death",
+    "Envar, Demon of Lunacy",
+    "Banok, Demon of Insanity",
+    "Rezun, Demon of Madness",
+    "Animation of Versatility",
+    "Animation of Elements",
+    "Animation of Power",
+    "Animation of Chaos",
+    "Animation of Supremacy",
+]
 # Daily God-Slayer gods (63) — the world gods that spawn DAILY, used for
 # God Slayer levels. This is the full 114 God Slayer roster MINUS the 51
 # Prime gods (cycle-based, handled by the prime watcher). Derived by diffing
@@ -1753,6 +1875,15 @@ SLAYER_TARGETS = {
     "tylos": "Tylos, The Lord Master", "varsanor": "Varsanor, Master of Darkness", "vitkros": "Vitkros, Hydra of the Deep",
     "wanh": "Wanhiroeaz the Devourer", "wind": "Windstrike The Vile", "zertan": "Zertan, The Collector",
 }
+
+def god_slayer_primes():
+    """The 51 God-Slayer PRIME gods = the 114 roster minus the 63 daily gods.
+    Derived from GOD_SLAYER_ROSTER so daily + prime always partition to exactly 114
+    (unlike prime_gods.json, which includes non-roster event primes)."""
+    daily = {v.lower() for v in SLAYER_TARGETS.values()}
+    return [g for g in GOD_SLAYER_ROSTER if g.lower() not in daily]
+
+
 
 
 def order_rooms_by_proximity(rooms: list, start: int = 11) -> list:

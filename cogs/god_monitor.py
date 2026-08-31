@@ -317,13 +317,14 @@ class GodMonitor(commands.Cog):
         keyed per server/crew. Runs concurrently but gently (small semaphore).
         The God-Slayer profile block lists BOTH world gods and primes, so we split
         the slayed set against the known prime list to track prime progress too."""
-        from outwar.scraper import parse_god_slayer, parse_full_profile
+        from outwar.scraper import parse_god_slayer, parse_full_profile, god_slayer_primes
         trustees = [t for t in db.get_trustees() if t.get("suid")]
         if not trustees:
             return
-        # Current prime god names (dynamic, from the live-populated prime list).
-        prime_names = {g.get("name", "").lower()
-                       for g in db.get_prime_gods() if g.get("name")}
+        # God-Slayer PRIME names = the 51 roster primes (114 minus 63 daily). NOT the
+        # live prime-watcher list, which includes event primes (e.g. Zhulian Friar)
+        # that aren't part of God Slayer and made the missing-counts fail to reconcile.
+        prime_names = {g.lower() for g in god_slayer_primes()}
         logger.info("GOD_MONITOR", f"Slayer status sweep: {len(trustees)} accounts…")
         sem = asyncio.Semaphore(6)
 
