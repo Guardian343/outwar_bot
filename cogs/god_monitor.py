@@ -1709,7 +1709,9 @@ class GodMonitor(commands.Cog):
     @envoy.command(name="autoboard")
     async def envoy_autoboard_sub(self, ctx, action: str = "status"):
         """Auto-updating leaderboard in the envoys channel. Usage:
-        !envoy autoboard start|stop|refresh|status"""
+        !envoy autoboard start|stop|refresh|repost|status
+          refresh → edit the existing boards in place (update numbers)
+          repost  → delete and repost fresh at the BOTTOM (also: bottom, bump)"""
         action = (action or "status").lower()
         if action == "start":
             channel = await self._get_alert_channel("envoys")
@@ -1731,7 +1733,14 @@ class GodMonitor(commands.Cog):
         elif action == "refresh":
             await ctx.send("⏳ Refreshing leaderboards now…")
             await self._post_or_refresh_leaderboards(force_repost=False)
-            await ctx.send("✅ Leaderboards refreshed.")
+            await ctx.send("✅ Leaderboards refreshed (edited in place).")
+        elif action in ("repost", "bottom", "bump"):
+            # Delete the existing board embeds and post fresh ones at the BOTTOM of the
+            # channel — for when the boards have drifted up-chat (e.g. above the envoy
+            # drops) and you want them back down where they're visible.
+            await ctx.send("⏳ Reposting leaderboards at the bottom…")
+            await self._post_or_refresh_leaderboards(force_repost=True)
+            await ctx.send("✅ Leaderboards reposted at the bottom.")
         else:
             running = self.leaderboard_refresh_loop.is_running()
             ids = db.get_settings().get("envoy_leaderboard_msgs", {})
