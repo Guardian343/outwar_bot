@@ -499,17 +499,11 @@ class GodMonitor(commands.Cog):
             except Exception:
                 pass
 
-            # New cycle → post fresh leaderboards so the channel isn't left showing
-            # the old cycle's stale board until the next scheduled refresh. force_repost
-            # deletes the old embeds and posts new ones for the new cycle.
-            # (Loot-winner display for the ENDED cycle is a separate build — see TODO,
-            # pending the Aug 20 rollover observation for sizing/format.)
-            try:
-                if db.get_settings().get("envoy_leaderboard_msgs"):
-                    await self._post_or_refresh_leaderboards(force_repost=True)
-                    logger.info("GOD_MONITOR", "[ENVOY ROLLOVER] posted fresh leaderboards for new cycle")
-            except Exception as e:
-                logger.warning("GOD_MONITOR", f"[ENVOY ROLLOVER] fresh leaderboard post failed: {e}")
+            # New cycle detected. We deliberately DON'T repost leaderboards here —
+            # doing so put them ABOVE the envoy drops (which post later, once the
+            # ended pool's loot finishes rolling), leaving the boards stranded up-chat.
+            # The fresh leaderboards are now posted AFTER the drops (see auto-loot
+            # completion below) so they land beneath the drops and stay viewable.
 
             # Reset the countdown-alert message tracker for the new cycle
             self._envoy_alert_msg_id = None
@@ -1186,6 +1180,15 @@ class GodMonitor(commands.Cog):
                     await self._post_envoy_drops(envoy)
                 if channel:
                     await channel.send(f"✅ All 8 envoy drops posted for pool **{ended_pool}**.")
+                # NOW post the fresh leaderboards for the new cycle — AFTER the drops,
+                # so in-channel order is: drops first, then the boards beneath them,
+                # keeping the leaderboards as the most-recent, easily-viewable message.
+                try:
+                    if db.get_settings().get("envoy_leaderboard_msgs"):
+                        await self._post_or_refresh_leaderboards(force_repost=True)
+                        logger.info("GOD_MONITOR", "[ENVOY ROLLOVER] posted fresh leaderboards below the drops")
+                except Exception as e:
+                    logger.warning("GOD_MONITOR", f"[ENVOY ROLLOVER] leaderboard post failed: {e}")
                 return
 
             if attempt <= MAX_RETRIES:
@@ -1197,6 +1200,13 @@ class GodMonitor(commands.Cog):
                 f"⚠️ Auto loot-fetch for pool **{ended_pool}** timed out (still rolling?). "
                 f"Run `!envoy-fetch {ended_pool}` manually once it's done."
             )
+        # Drops didn't post, but still refresh the leaderboards for the new cycle so
+        # the channel isn't left on the stale old board.
+        try:
+            if db.get_settings().get("envoy_leaderboard_msgs"):
+                await self._post_or_refresh_leaderboards(force_repost=True)
+        except Exception as e:
+            logger.warning("GOD_MONITOR", f"[ENVOY ROLLOVER] fallback leaderboard post failed: {e}")
 
     async def _post_envoy_drops(self, envoy):
         from outwar.scraper import parse_prime_god_loot, get_latest_envoy_pool
