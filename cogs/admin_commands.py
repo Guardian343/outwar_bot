@@ -750,6 +750,98 @@ class AdminCommands(commands.Cog):
                               "room mapping pending.")
         await status.edit(content=None, embed=embed)
 
+    @commands.command(name="teleporters", aliases=["teles", "telelist"])
+    async def teleporters_cmd(self, ctx, *, filter_arg: str = ""):
+        """
+        Inspect the teleporter knowledge base (read-only — nothing is fired or moved).
+          !teleporters            → summary: how many known, mapped vs unmapped rooms
+          !teleporters mapped     → only those with a destination room worked out
+          !teleporters unmapped   → those still needing a room number (the gap to fill)
+          !teleporters <text>     → filter by name/destination text
+        This surfaces what we know for the future teleport-routing build and, crucially,
+        shows exactly which teleporters still need their destination ROOM mapped — that
+        hand-mapping is what gates proximity routing.
+        """
+        import discord
+        kb = db.get_teleporters()
+        if not kb:
+            await ctx.send("No teleporters known yet. Run `!scan-keys <account>` on an "
+                           "account that holds teleporter items first.")
+            return
+
+        # Normalise into a list of records.
+        recs = []
+        for item_id, t in kb.items():
+            recs.append({
+                "id": item_id,
+                "name": t.get("name", "?"),
+                "destination": t.get("destination"),   # text description of where it goes
+                "kind": t.get("kind"),                  # reusable / consumable
+                "room": t.get("room"),                  # mapped room number (or None)
+            })
+
+        f = filter_arg.strip().lower()
+        mapped = [r for r in recs if r["room"]]
+        unmapped = [r for r in recs if not r["room"]]
+        reusable = [r for r in recs if r["kind"] == "reusable"]
+        consumable = [r for r in recs if r["kind"] == "consumable"]
+
+        # --- Filtered views ---
+        if f in ("mapped", "done"):
+            view, title = mapped, f"Mapped teleporters ({len(mapped)})"
+        elif f in ("unmapped", "todo", "pending"):
+            view, title = unmapped, f"Unmapped teleporters — need room numbers ({len(unmapped)})"
+        elif f:
+            view = [r for r in recs if f in r["name"].lower()
+                    or (r["destination"] and f in r["destination"].lower())]
+            title = f"Teleporters matching '{filter_arg}' ({len(view)})"
+        else:
+            # --- Summary embed ---
+            embed = discord.Embed(title="🌀 Teleporter knowledge base",
+                                  color=discord.Color.blurple())
+            embed.add_field(name="Known", value=str(len(recs)), inline=True)
+            embed.add_field(name="Room mapped", value=f"{len(mapped)} ✅", inline=True)
+            embed.add_field(name="Room unmapped", value=f"{len(unmapped)} ⏳", inline=True)
+            embed.add_field(name="Reusable", value=str(len(reusable)), inline=True)
+            embed.add_field(name="Consumable", value=str(len(consumable)), inline=True)
+            embed.add_field(name="\u200b", value="\u200b", inline=True)
+            embed.description = (
+                "Read-only view of what the bot knows about teleporters. "
+                "`!teleporters unmapped` shows the ones still needing a destination "
+                "room number — that mapping is what future teleport-routing needs.")
+            if unmapped:
+                sample = ", ".join(r["name"] for r in unmapped[:8])
+                embed.add_field(name="Next to map (sample)",
+                                value=sample + ("…" if len(unmapped) > 8 else ""),
+                                inline=False)
+            embed.set_footer(text="Nothing is fired or moved — inspection only.")
+            await ctx.send(embed=embed)
+            return
+
+        if not view:
+            await ctx.send(f"No teleporters match `{filter_arg}`.")
+            return
+
+        # --- Detail list ---
+        lines = []
+        for r in sorted(view, key=lambda x: (x["room"] is None, x["name"].lower())):
+            room = f"room {r['room']}" if r["room"] else "room **?**"
+            kind = f" · {r['kind']}" if r["kind"] else ""
+            dest = f" → {r['destination']}" if r["destination"] else ""
+            lines.append(f"🌀 **{r['name']}**{dest} — {room}{kind}")
+        # chunk to Discord limits
+        embed = discord.Embed(title=title, color=discord.Color.blurple())
+        buf = ""
+        for ln in lines:
+            if len(buf) + len(ln) + 1 > 1024:
+                embed.add_field(name="\u200b", value=buf, inline=False)
+                buf = ""
+            buf += ln + "\n"
+        if buf:
+            embed.add_field(name="\u200b", value=buf, inline=False)
+        embed.set_footer(text="Inspection only — nothing fired or moved.")
+        await ctx.send(embed=embed)
+
 
 PROTECTED_ACCOUNTS = {"guardianliam", "brabbit2005", "chester2210", "3ncore"}
 
