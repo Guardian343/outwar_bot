@@ -842,81 +842,86 @@ class AdminCommands(commands.Cog):
         embed.set_footer(text="Inspection only — nothing fired or moved.")
         await ctx.send(embed=embed)
 
-    @commands.command(name="tele-map", aliases=["telemap", "tmap"])
-    async def tele_map(self, ctx, account: str, *, rest: str):
-        """
-        Record a teleporter's ARRIVAL ROOM after you activate it in-game.
-          Workflow: activate the teleporter key in-game on <account>, THEN run:
-          !tele-map <account> <teleporter name>        → reads the account's CURRENT room
-                                                          and saves it as that teleporter's arrival room
-          !tele-map <account> <teleporter name> = <room>  → set the room number manually
-        The bot does NOT activate anything — you activate in-game, this just captures
-        where you landed. Match is a case-insensitive 'contains' on the teleporter name.
-        """
-        rest = rest.strip()
-        # optional explicit room via "= <room>" or trailing number after the name
-        manual_room = None
-        if "=" in rest:
-            name_part, room_part = rest.rsplit("=", 1)
-            rp = room_part.strip()
-            if rp.isdigit():
-                manual_room = int(rp)
-                rest = name_part.strip()
-        tele_name = rest.strip().strip('"')
-        if not tele_name:
-            await ctx.send("Usage: `!tele-map <account> <teleporter name>` "
-                           "(activate it in-game first), or `… = <room>` to set manually.")
-            return
 
-        # Resolve the teleporter by name (contains match) in the KB.
+    @commands.command(name="tele-fire", aliases=["telefire"])
+    async def tele_fire(self, ctx, account: str, *, tele_name: str):
+        """
+        LIVE TEST — fire ONE teleporter key on an account and show the raw result.
+        This ACTIVATES a real item (POST /ajax/backpack_action.php action=activate) and
+        will move/consume it. Use to prove the mechanism on a single key before any bulk
+        mapping. Usage: !tele-fire <account> <teleporter name>
+          - Reads the item id from the teleporter KB (from !scan-keys)
+          - Fires the activate request, shows status / redirectTo / error verbatim
+          - Reads the account's resulting room and (if sane) stores it as the arrival room
+        """
+        import json as _json
+        tele_name = tele_name.strip().strip('"')
+
+        # Resolve the teleporter → item id from the KB.
         kb = db.get_teleporters()
         matches = [(iid, t) for iid, t in kb.items()
                    if tele_name.lower() in (t.get("name", "").lower())]
         if not matches:
-            await ctx.send(f"🔎 No teleporter matching `{tele_name}` in the KB. "
-                           f"Run `!teleporters` to see known names.")
+            await ctx.send(f"🔎 No teleporter matching `{tele_name}`. See `!teleporters`.")
             return
         if len(matches) > 1:
             names = ", ".join(f"`{t.get('name')}`" for _, t in matches[:10])
-            await ctx.send(f"🔎 `{tele_name}` matches {len(matches)} teleporters: {names}\n"
-                           f"Be more specific.")
+            await ctx.send(f"🔎 `{tele_name}` matches {len(matches)}: {names}. Be specific.")
             return
         item_id, trec = matches[0]
 
-        # Determine the arrival room.
-        if manual_room is not None:
-            room = manual_room
-            src = "set manually"
-        else:
-            # Resolve account → suid, then read its current room (no move — room=0 is a
-            # no-op that just reports curRoom).
-            trustees = db.get_trustees()
-            t = next((x for x in trustees
-                      if x.get("name", "").lower() == account.lower()), None)
-            if not t or not t.get("suid"):
-                await ctx.send(f"Account `{account}` not found (or has no suid).")
-                return
-            try:
-                raw = await self.session.get_as("ajax_changeroomb.php?room=0&lastroom=0", t["suid"])
-                import json as _json
-                room = int(_json.loads(raw).get("curRoom", 0))
-            except Exception as e:
-                await ctx.send(f"⚠️ Couldn't read current room for `{account}`: `{e}`")
-                return
-            if not room:
-                await ctx.send(f"⚠️ Read room 0 for `{account}` — did the activation work? "
-                               f"Try again, or set manually with `= <room>`.")
-                return
-            src = f"read from {account}'s current room"
+        # Resolve account → suid.
+        t = next((x for x in db.get_trustees()
+                  if x.get("name", "").lower() == account.lower()), None)
+        if not t or not t.get("suid"):
+            await ctx.send(f"Account `{account}` not found (or no suid).")
+            return
+        suid = t["suid"]
 
-        # Write the room into the KB (preserving everything else).
-        kb[item_id]["room"] = room
-        db.save_teleporters(kb)
-        await ctx.send(
-            f"✅ **{trec.get('name')}** → arrival room **{room}** ({src}).\n"
-            f"Destination text: {trec.get('destination') or '—'} · kind: {trec.get('kind') or '?'}\n"
-            f"Run `!teleporters mapped` to see progress."
-        )
+        await ctx.send(f"🧪 Firing **{trec.get('name')}** (item {item_id}) on **{account}**…\n"
+                       f"_This activates a real item — watch what happens in-game._")
+
+        # Fire the activate request. jQuery sends itemids as an array → itemids[]=id.
+        try:
+            raw = await self.session.post_as(
+                "ajax/backpack_action.php",
+                {"action": "activate", "itemids[]": str(item_id)},
+                suid,
+            )
+        except Exception as e:
+            await ctx.send(f"⚠️ Request error: `{e}`")
+            return
+
+        # Show the raw response verbatim — this is the whole point of the test.
+        snippet = raw[:1500] if raw else "(empty response)"
+        await ctx.send(f"**Raw response:**\n```\n{snippet}\n```")
+
+        # Try to parse it as the JSON the JS expects (status / error / redirectTo).
+        try:
+            data = _json.loads(raw)
+            bits = []
+            if data.get("status"): bits.append(f"status: {data['status']}")
+            if data.get("error"): bits.append(f"error: {data['error']}")
+            if data.get("redirectTo"): bits.append(f"redirectTo: {data['redirectTo']}")
+            if bits:
+                await ctx.send("**Parsed:** " + " · ".join(bits))
+        except Exception:
+            await ctx.send("_(response wasn't clean JSON — see raw above)_")
+
+        # Read the resulting room (no-op move reports curRoom).
+        try:
+            loc = await self.session.get_as("ajax_changeroomb.php?room=0&lastroom=0", suid)
+            room = int(_json.loads(loc).get("curRoom", 0))
+        except Exception:
+            room = 0
+        if room:
+            kb[item_id]["room"] = room
+            db.save_teleporters(kb)
+            await ctx.send(f"📍 **{account}** is now in room **{room}** — saved as "
+                           f"**{trec.get('name')}**'s arrival room. Confirm it matches in-game!")
+        else:
+            await ctx.send("📍 Couldn't read a resulting room — check in-game where the "
+                           "account landed and use `!tele-map` to set it.")
 
 
 PROTECTED_ACCOUNTS = {"guardianliam", "brabbit2005", "chester2210", "3ncore"}
