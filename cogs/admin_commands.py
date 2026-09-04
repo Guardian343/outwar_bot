@@ -842,6 +842,82 @@ class AdminCommands(commands.Cog):
         embed.set_footer(text="Inspection only — nothing fired or moved.")
         await ctx.send(embed=embed)
 
+    @commands.command(name="tele-map", aliases=["telemap", "tmap"])
+    async def tele_map(self, ctx, account: str, *, rest: str):
+        """
+        Record a teleporter's ARRIVAL ROOM after you activate it in-game.
+          Workflow: activate the teleporter key in-game on <account>, THEN run:
+          !tele-map <account> <teleporter name>        → reads the account's CURRENT room
+                                                          and saves it as that teleporter's arrival room
+          !tele-map <account> <teleporter name> = <room>  → set the room number manually
+        The bot does NOT activate anything — you activate in-game, this just captures
+        where you landed. Match is a case-insensitive 'contains' on the teleporter name.
+        """
+        rest = rest.strip()
+        # optional explicit room via "= <room>" or trailing number after the name
+        manual_room = None
+        if "=" in rest:
+            name_part, room_part = rest.rsplit("=", 1)
+            rp = room_part.strip()
+            if rp.isdigit():
+                manual_room = int(rp)
+                rest = name_part.strip()
+        tele_name = rest.strip().strip('"')
+        if not tele_name:
+            await ctx.send("Usage: `!tele-map <account> <teleporter name>` "
+                           "(activate it in-game first), or `… = <room>` to set manually.")
+            return
+
+        # Resolve the teleporter by name (contains match) in the KB.
+        kb = db.get_teleporters()
+        matches = [(iid, t) for iid, t in kb.items()
+                   if tele_name.lower() in (t.get("name", "").lower())]
+        if not matches:
+            await ctx.send(f"🔎 No teleporter matching `{tele_name}` in the KB. "
+                           f"Run `!teleporters` to see known names.")
+            return
+        if len(matches) > 1:
+            names = ", ".join(f"`{t.get('name')}`" for _, t in matches[:10])
+            await ctx.send(f"🔎 `{tele_name}` matches {len(matches)} teleporters: {names}\n"
+                           f"Be more specific.")
+            return
+        item_id, trec = matches[0]
+
+        # Determine the arrival room.
+        if manual_room is not None:
+            room = manual_room
+            src = "set manually"
+        else:
+            # Resolve account → suid, then read its current room (no move — room=0 is a
+            # no-op that just reports curRoom).
+            trustees = db.get_trustees()
+            t = next((x for x in trustees
+                      if x.get("name", "").lower() == account.lower()), None)
+            if not t or not t.get("suid"):
+                await ctx.send(f"Account `{account}` not found (or has no suid).")
+                return
+            try:
+                raw = await self.session.get_as("ajax_changeroomb.php?room=0&lastroom=0", t["suid"])
+                import json as _json
+                room = int(_json.loads(raw).get("curRoom", 0))
+            except Exception as e:
+                await ctx.send(f"⚠️ Couldn't read current room for `{account}`: `{e}`")
+                return
+            if not room:
+                await ctx.send(f"⚠️ Read room 0 for `{account}` — did the activation work? "
+                               f"Try again, or set manually with `= <room>`.")
+                return
+            src = f"read from {account}'s current room"
+
+        # Write the room into the KB (preserving everything else).
+        kb[item_id]["room"] = room
+        db.save_teleporters(kb)
+        await ctx.send(
+            f"✅ **{trec.get('name')}** → arrival room **{room}** ({src}).\n"
+            f"Destination text: {trec.get('destination') or '—'} · kind: {trec.get('kind') or '?'}\n"
+            f"Run `!teleporters mapped` to see progress."
+        )
+
 
 PROTECTED_ACCOUNTS = {"guardianliam", "brabbit2005", "chester2210", "3ncore"}
 
