@@ -68,6 +68,7 @@ class PrimeWatcher(commands.Cog):
         self.bot = bot
         self._task = None
         self._started = False
+        self._timing_log = []   # silent rolling buffer of recent prime-raid timings (!pw-timing)
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -143,6 +144,37 @@ class PrimeWatcher(commands.Cog):
             "🛰️ Prime Watchers",
             "\n".join(lines) + "\n\nUse `!pw show <name>` for details, `!pw help` for commands.",
         ))
+
+    @primewatcher.command(name="timing")
+    async def pw_timing(self, ctx):
+        """Show recent prime-raid timings (silent rolling buffer, no channel noise
+        otherwise). A permanent diagnostic — if a future change alters how primewatcher
+        moves/raids, this shows whether raid times shifted. Reads memory only."""
+        import discord
+        log = getattr(self, "_timing_log", [])
+        if not log:
+            await ctx.send("No prime-raid timings recorded yet. They accumulate silently "
+                           "as primewatcher runs its hourly cycles — check back after a cycle.")
+            return
+        secs = [e["secs"] for e in log if e.get("secs") is not None]
+        avg = sum(secs) / len(secs) if secs else 0
+        fastest = min(secs) if secs else 0
+        slowest = max(secs) if secs else 0
+        embed = discord.Embed(title="⏱️ Primewatcher raid timings",
+                              color=discord.Color.blurple())
+        embed.add_field(name="Samples", value=str(len(log)), inline=True)
+        embed.add_field(name="Avg / raid", value=f"{avg:.1f}s", inline=True)
+        embed.add_field(name="Fastest / slowest", value=f"{fastest:.1f}s / {slowest:.1f}s", inline=True)
+        # last ~15 individual raids, most recent first
+        lines = []
+        for e in reversed(log[-15:]):
+            w = "✅" if e.get("won") else "✗"
+            lines.append(f"{e.get('at','?')} {w} {e.get('god','?')[:24]} — "
+                         f"{e.get('secs','?')}s ({e.get('squad','?')} accts)")
+        embed.add_field(name="Recent raids", value="\n".join(lines) or "—", inline=False)
+        embed.set_footer(text="Silent by default · buffer holds last 50 raids · memory-only "
+                              "(clears on bot restart)")
+        await ctx.send(embed=embed)
 
     @primewatcher.command(name="help")
     async def pw_help(self, ctx):
@@ -970,6 +1002,19 @@ class PrimeWatcher(commands.Cog):
                                                g.get("pot_groups") or [], channel)
                     won, dmg, rnote = await raid_cog._do_god_raid(None, god, squad)
                     attempts += 1
+                    # Record raid wall-time into a silent rolling buffer for !pw-timing.
+                    try:
+                        secs = getattr(raid_cog, "_last_god_raid_secs", None)
+                        if secs is not None:
+                            self._timing_log.append({
+                                "god": st["god"], "secs": round(secs, 1),
+                                "squad": len(squad), "won": bool(won),
+                                "at": datetime.now().strftime("%H:%M"),
+                            })
+                            # keep only the most recent 50 entries
+                            self._timing_log = self._timing_log[-50:]
+                    except Exception:
+                        pass
                     if won:
                         got += 1
                     else:

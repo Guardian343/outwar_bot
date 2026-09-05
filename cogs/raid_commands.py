@@ -1412,6 +1412,12 @@ class RaidCommands(commands.Cog):
             dbg("no god_id on god dict")
             return False, 0, None
 
+        # Lightweight total-time marker for primewatcher's !pw-timing diagnostic. Set at
+        # the successful-launch return below; bail-outs (capped/low-rage/not-spawned)
+        # aren't real raids so we don't record their time.
+        import time as _pw_time
+        _pw_t0 = _pw_time.monotonic()
+
         # Sort by rage descending — try highest rage first as former
         sorted_trustees = sorted(trustees, key=lambda t: t.get("rage", 0), reverse=True)
         if not sorted_trustees:
@@ -1995,6 +2001,11 @@ class RaidCommands(commands.Cog):
             session._session.cookie_jar.update_cookies(
                 {"ow_userid": str(session.user_id)}, response_url=SIGIL_URL
             )
+            # Record total raid wall-time for primewatcher's !pw-timing diagnostic.
+            try:
+                self._last_god_raid_secs = _pw_time.monotonic() - _pw_t0
+            except Exception:
+                self._last_god_raid_secs = None
 
     def _resolve_group(self, group: str) -> list:
         # Delegates to the canonical impl; RAIDS exclude accounts on the exclude
