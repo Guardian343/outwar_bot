@@ -1004,6 +1004,104 @@ class AdminCommands(commands.Cog):
         await ctx.send(f"✅ **{trec.get('name')}** → arrival room **{room}** ({src}). "
                        f"`!teleporters mapped` to see progress.")
 
+    @commands.command(name="tele-map-all", aliases=["telemapall", "tmapall"])
+    async def tele_map_all(self, ctx, account: str, mode: str = "reusable"):
+        """
+        Bulk-map teleporter arrival rooms: fire each UNMAPPED teleporter on <account>,
+        one at a time, capture where it lands, and save the room. Fires real items.
+          !tele-map-all <account>              → only teleporters KNOWN reusable (safe default)
+          !tele-map-all <account> all          → include consumables (WILL use them up)
+          !tele-map-all <account> remap         → also re-fire already-mapped ones (verify)
+        Skips any the account doesn't own. Paces between fires. Watch it in-game.
+        """
+        import json as _json, asyncio as _asyncio
+        mode = (mode or "reusable").strip().lower()
+
+        t = next((x for x in db.get_trustees()
+                  if x.get("name", "").lower() == account.lower()), None)
+        if not t or not t.get("suid"):
+            await ctx.send(f"Account `{account}` not found (or no suid).")
+            return
+        suid = t["suid"]
+
+        kb = db.get_teleporters()
+        # Collapse to one target per NAME (same-named copies go to the same room, so we
+        # only need to map each distinct teleporter once). Prefer an unmapped entry.
+        by_name = {}
+        for iid, rec in kb.items():
+            nm = (rec.get("name") or "").strip()
+            by_name.setdefault(nm, []).append((iid, rec))
+
+        targets = []
+        for nm, entries in by_name.items():
+            # already mapped? skip unless remap
+            already = next((e for e in entries if e[1].get("room")), None)
+            if already and mode != "remap":
+                continue
+            # consumable filter
+            kind = entries[0][1].get("kind")
+            if mode not in ("all", "remap") and kind == "consumable":
+                continue
+            targets.append((nm, entries))
+
+        if not targets:
+            await ctx.send("Nothing to map with that mode. "
+                           "(Try `all` to include consumables, or `remap` to redo mapped ones.)")
+            return
+
+        warn = ("⚠️ includes **consumables** (will be used up)" if mode == "all"
+                else "re-firing already-mapped too" if mode == "remap"
+                else "reusable-only (safe)")
+        await ctx.send(f"🗺️ Bulk-mapping **{len(targets)}** teleporters on **{account}** "
+                       f"— {warn}. Firing one at a time; watch in-game. `!boss-stop` won't "
+                       f"halt this — it runs to completion.")
+
+        mapped_now = 0
+        results = []
+        for nm, entries in targets:
+            fired = False
+            for cand_id, rec in entries:
+                try:
+                    resp = await self.session.post_as(
+                        "ajax/backpack_action.php",
+                        {"action": "activate", "itemids[]": str(cand_id)},
+                        suid,
+                    )
+                except Exception as e:
+                    results.append(f"⚠️ {nm}: request error"); continue
+                low = (resp or "").lower()
+                if '"error"' in low and 'not' in low and ('own' in low or 'found' in low or 'have' in low):
+                    continue   # account doesn't own this copy — try next
+                # success — read arrival room
+                await _asyncio.sleep(0.4)
+                try:
+                    loc = await self.session.get_as("ajax_changeroomb.php?room=0&lastroom=0", suid)
+                    room = int(_json.loads(loc).get("curRoom", 0))
+                except Exception:
+                    room = 0
+                if room:
+                    kb[cand_id]["room"] = room
+                    db.save_teleporters(kb)
+                    mapped_now += 1
+                    results.append(f"✅ {nm} → room {room}")
+                else:
+                    results.append(f"❓ {nm}: fired but couldn't read room")
+                fired = True
+                break
+            if not fired:
+                results.append(f"⛔ {nm}: {account} doesn't own it")
+            await _asyncio.sleep(0.8)   # pace between teleporters
+
+        # Report in chunks (Discord 2000-char limit)
+        header = f"🗺️ **Bulk map complete** — {mapped_now} newly mapped of {len(targets)} tried.\n"
+        buf = header
+        for line in results:
+            if len(buf) + len(line) + 1 > 1900:
+                await ctx.send(buf); buf = ""
+            buf += line + "\n"
+        if buf.strip():
+            await ctx.send(buf)
+
     @commands.command(name="teleporters-clean", aliases=["teles-clean", "tele-dedupe"])
     async def teleporters_clean(self, ctx, apply: str = ""):
         """
