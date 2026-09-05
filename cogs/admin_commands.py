@@ -732,16 +732,19 @@ class AdminCommands(commands.Cog):
         # mapped by hand (this used to reset "room" to None every scan).
         _total, _new = db.merge_teleporters(teleporters)
 
+        _reuse = sum(1 for s in teleporters if s.get("kind") == "reusable")
+        _consume = sum(1 for s in teleporters if s.get("kind") == "consumable")
         embed = es.info_embed(f"🔑 Key scan — {t['name']}")
         embed.add_field(
             name="Totals",
             value=(f"{len(items)} keys · **{len(teleporters)}** teleporters "
-                   f"(all reusable) · {len(others)} other"),
+                   f"({_reuse} reusable / {_consume} consumable by rollover text) "
+                   f"· {len(others)} other"),
             inline=False)
         if teleporters:
             lines = "\n".join(f"• **{s['item_name']}** → {s['destination']}"
                               for s in teleporters[:30])
-            embed.add_field(name=f"🌀 Teleporters — all usable ({len(teleporters)})",
+            embed.add_field(name=f"🌀 Teleporters ({len(teleporters)})",
                             value=lines[:1020], inline=False)
             if len(teleporters) > 30:
                 embed.add_field(name="…", value=f"+{len(teleporters)-30} more (see console)",
@@ -1003,6 +1006,73 @@ class AdminCommands(commands.Cog):
         db.save_teleporters(kb)
         await ctx.send(f"✅ **{trec.get('name')}** → arrival room **{room}** ({src}). "
                        f"`!teleporters mapped` to see progress.")
+
+    @commands.command(name="count-keys", aliases=["countkeys", "keycount"])
+    async def count_keys(self, ctx, *, account: str = None):
+        """
+        Count everything in an account's Keys backpack tab — distinct items AND total
+        quantity — so you can run it BEFORE and AFTER firing teleporters to prove whether
+        anything was consumed. Read-only. Usage: !count-keys [account]
+        """
+        from outwar.scraper import parse_backpack_items
+        trustees = db.get_trustees()
+        if account:
+            t = next((x for x in trustees
+                      if x.get("name", "").lower() == account.lower()), None)
+            if not t:
+                await ctx.send(f"Account `{account}` not found in trustees.")
+                return
+        else:
+            t = next((x for x in trustees if x.get("suid")), None)
+            if not t:
+                await ctx.send("No trustees with a suid.")
+                return
+        suid = t.get("suid")
+        if not suid:
+            await ctx.send(f"`{t['name']}` has no suid.")
+            return
+
+        try:
+            html = await self.session.get_as("ajax/backpackcontents.php?tab=key", suid)
+        except Exception as e:
+            await ctx.send(f"Failed to fetch keys tab: {e}")
+            return
+
+        items = parse_backpack_items(html)
+        if not items:
+            await ctx.send(f"No keys found for **{t['name']}**.")
+            return
+
+        distinct = len(items)
+        total_qty = 0
+        for it in items:
+            try:
+                total_qty += int(it.get("quantity", 1) or 1)
+            except (ValueError, TypeError):
+                total_qty += 1
+
+        import discord
+        embed = discord.Embed(title=f"🔑 Key count — {t['name']}",
+                              color=discord.Color.teal())
+        embed.add_field(name="Distinct items", value=str(distinct), inline=True)
+        embed.add_field(name="Total quantity", value=str(total_qty), inline=True)
+        embed.set_footer(text="Run before AND after firing teleporters — if these numbers "
+                              "are unchanged, nothing was consumed.")
+        # Per-item quantity list (so you can see exactly which one changed, if any).
+        lines = []
+        for it in sorted(items, key=lambda x: x.get("item_name", "")):
+            q = it.get("quantity", 1) or 1
+            qtag = f" ×{q}" if str(q) not in ("1", "None") else ""
+            lines.append(f"{it.get('item_name','?')}{qtag}")
+        buf = ""
+        for ln in lines:
+            if len(buf) + len(ln) + 2 > 1024:
+                embed.add_field(name="Items", value=buf, inline=False); buf = ""
+            buf += ln + "\n"
+        if buf.strip():
+            embed.add_field(name="Items" if not embed.fields[2:] else "Items (cont.)",
+                            value=buf, inline=False)
+        await ctx.send(embed=embed)
 
     @commands.command(name="tele-map-all", aliases=["telemapall", "tmapall"])
     async def tele_map_all(self, ctx, account: str, mode: str = "reusable"):
