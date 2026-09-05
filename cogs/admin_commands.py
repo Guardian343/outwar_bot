@@ -859,14 +859,23 @@ class AdminCommands(commands.Cog):
 
         # Resolve the teleporter → item id from the KB.
         kb = db.get_teleporters()
-        matches = [(iid, t) for iid, t in kb.items()
-                   if tele_name.lower() in (t.get("name", "").lower())]
+        # Allow explicit id selection: "#12345"
+        if tele_name.startswith("#") and tele_name[1:].strip().isdigit():
+            want = tele_name[1:].strip()
+            matches = [(iid, t) for iid, t in kb.items() if str(iid) == want]
+        else:
+            matches = [(iid, t) for iid, t in kb.items()
+                       if tele_name.lower() in (t.get("name", "").lower())]
         if not matches:
             await ctx.send(f"🔎 No teleporter matching `{tele_name}`. See `!teleporters`.")
             return
         if len(matches) > 1:
-            names = ", ".join(f"`{t.get('name')}`" for _, t in matches[:10])
-            await ctx.send(f"🔎 `{tele_name}` matches {len(matches)}: {names}. Be specific.")
+            # Show ids so an ambiguous name can be fired by id, and hint at the de-duper.
+            lines = "\n".join(f"`#{iid}` — {t.get('name')} "
+                              f"(room {t.get('room') or '?'})" for iid, t in matches[:10])
+            await ctx.send(f"🔎 `{tele_name}` matches {len(matches)} entries:\n{lines}\n"
+                           f"Fire a specific one with `!tele-fire {account} #<id>`, or run "
+                           f"`!teleporters-clean` — these may be duplicate KB entries.")
             return
         item_id, trec = matches[0]
 
@@ -922,6 +931,128 @@ class AdminCommands(commands.Cog):
         else:
             await ctx.send("📍 Couldn't read a resulting room — check in-game where the "
                            "account landed and use `!tele-map` to set it.")
+
+
+    @commands.command(name="tele-map", aliases=["telemap", "tmap"])
+    async def tele_map(self, ctx, account: str, *, rest: str):
+        """
+        Record a teleporter's ARRIVAL ROOM after you activate it in-game.
+          !tele-map <account> <teleporter name>          → reads the account's CURRENT room
+          !tele-map <account> <teleporter name> = <room> → set the room manually
+        The bot does NOT activate anything here — you activate in-game, this captures where
+        you landed. (To have the bot fire it for you, use !tele-fire.)
+        """
+        import json as _json
+        rest = rest.strip()
+        manual_room = None
+        if "=" in rest:
+            name_part, room_part = rest.rsplit("=", 1)
+            rp = room_part.strip()
+            if rp.isdigit():
+                manual_room = int(rp); rest = name_part.strip()
+        tele_name = rest.strip().strip('"')
+        if not tele_name:
+            await ctx.send("Usage: `!tele-map <account> <teleporter name>` or `… = <room>`.")
+            return
+        kb = db.get_teleporters()
+        matches = [(iid, t) for iid, t in kb.items()
+                   if tele_name.lower() in (t.get("name", "").lower())]
+        if not matches:
+            await ctx.send(f"🔎 No teleporter matching `{tele_name}`. See `!teleporters`.")
+            return
+        if len(matches) > 1:
+            lines = "\n".join(f"`#{iid}` — {t.get('name')}" for iid, t in matches[:10])
+            await ctx.send(f"🔎 `{tele_name}` matches {len(matches)}:\n{lines}\n"
+                           f"These may be duplicates — try `!teleporters-clean`.")
+            return
+        item_id, trec = matches[0]
+        if manual_room is not None:
+            room, src = manual_room, "set manually"
+        else:
+            t = next((x for x in db.get_trustees()
+                      if x.get("name", "").lower() == account.lower()), None)
+            if not t or not t.get("suid"):
+                await ctx.send(f"Account `{account}` not found (or no suid)."); return
+            try:
+                raw = await self.session.get_as("ajax_changeroomb.php?room=0&lastroom=0", t["suid"])
+                room = int(_json.loads(raw).get("curRoom", 0))
+            except Exception as e:
+                await ctx.send(f"⚠️ Couldn't read current room: `{e}`"); return
+            if not room:
+                await ctx.send("⚠️ Read room 0 — set manually with `= <room>`."); return
+            src = f"read from {account}'s current room"
+        kb[item_id]["room"] = room
+        db.save_teleporters(kb)
+        await ctx.send(f"✅ **{trec.get('name')}** → arrival room **{room}** ({src}). "
+                       f"`!teleporters mapped` to see progress.")
+
+    @commands.command(name="teleporters-clean", aliases=["teles-clean", "tele-dedupe"])
+    async def teleporters_clean(self, ctx, apply: str = ""):
+        """
+        Inspect (and optionally fix) duplicate teleporter entries.
+          !teleporters-clean          → REPORT duplicate-by-name groups with their raw ids
+                                         (shows WHY there are dupes — compare the ids)
+          !teleporters-clean apply    → de-dupe: keep one entry per name, preferring the
+                                         one that already has a mapped room, merging fields
+        Read-only unless you pass 'apply'. Nothing in-game is touched either way.
+        """
+        import discord
+        kb = db.get_teleporters()
+        if not kb:
+            await ctx.send("Teleporter KB is empty.")
+            return
+
+        # Group entries by normalised name.
+        by_name = {}
+        for iid, t in kb.items():
+            nm = (t.get("name") or "").strip().lower()
+            by_name.setdefault(nm, []).append((iid, t))
+
+        dupes = {nm: entries for nm, entries in by_name.items() if len(entries) > 1}
+        if not dupes:
+            await ctx.send("✅ No duplicate teleporter names — KB is clean.")
+            return
+
+        if apply.strip().lower() != "apply":
+            # REPORT mode — show each dupe group with raw ids so we can see the cause.
+            embed = discord.Embed(
+                title=f"🔍 Duplicate teleporters ({len(dupes)} names affected)",
+                color=discord.Color.orange())
+            embed.description = ("Same name stored under multiple keys. Compare the ids to "
+                                 "see the cause. Run `!teleporters-clean apply` to merge.")
+            shown = 0
+            for nm, entries in dupes.items():
+                if shown >= 15:
+                    break
+                lines = []
+                for iid, t in entries:
+                    room = t.get("room")
+                    lines.append(f"id=`{iid}` · room={room if room else '?'} · "
+                                 f"{t.get('kind') or '?'}")
+                embed.add_field(name=entries[0][1].get("name", nm),
+                                value="\n".join(lines), inline=False)
+                shown += 1
+            await ctx.send(embed=embed)
+            return
+
+        # APPLY mode — merge each group to one entry.
+        removed = 0
+        for nm, entries in dupes.items():
+            # Prefer the entry that has a mapped room; else the first.
+            entries_sorted = sorted(entries, key=lambda e: (e[1].get("room") is None,))
+            keep_id, keep_rec = entries_sorted[0]
+            # Merge any non-null fields from the others into the kept one.
+            for iid, t in entries_sorted[1:]:
+                for f in ("destination", "kind", "room"):
+                    if not keep_rec.get(f) and t.get(f):
+                        keep_rec[f] = t[f]
+                del kb[iid]
+                removed += 1
+            kb[keep_id] = keep_rec
+        db.save_teleporters(kb)
+        word = "entry" if removed == 1 else "entries"
+        await ctx.send(f"✅ De-duped: removed **{removed}** duplicate {word}, "
+                       f"KB now has **{len(kb)}** teleporters. Run `!teleporters` to verify.")
 
 
 PROTECTED_ACCOUNTS = {"guardianliam", "brabbit2005", "chester2210", "3ncore"}
