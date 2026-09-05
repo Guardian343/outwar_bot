@@ -2653,6 +2653,95 @@ class RaidCommands(commands.Cog):
         embed.set_footer(text=f"Server {sid} · Crew {crew_lbl} · cached {rec.get('updated','?')}")
         await ctx.send(embed=embed)
 
+    @commands.command(name="slayer-overview", aliases=["slayeroverview", "slayer-crew"])
+    async def slayer_overview(self, ctx, *, crew: str):
+        """Crew-wide God-Slayer standing from the daily cache — who still needs daily
+        gods, who's behind on primes, and aggregate progress. Read-only (no live fetch);
+        reads the 3am-sweep cache. Usage: !slayer-overview <crew>"""
+        from outwar import database as db
+        from outwar.scraper import resolve_slayer_targets
+        import discord
+
+        cache = db.get_slayer_status_cache()
+        if not cache:
+            await ctx.send("No slayer status cached yet. Run `!slayer-sweep` or wait for "
+                           "the 3am sweep.")
+            return
+
+        # Find the crew across servers (case-insensitive contains, so 'lod'/'spectrum' work).
+        crew_l = crew.strip().lower()
+        accounts = {}   # account -> record
+        matched_crew = None
+        matched_sid = None
+        for sid, crews in cache.items():
+            for cname, accs in crews.items():
+                if crew_l in cname.lower() or crew_l == "all":
+                    matched_crew = cname if crew_l != "all" else "all crews"
+                    matched_sid = sid
+                    accounts.update(accs)
+        if not accounts:
+            crews_seen = sorted({c for crews in cache.values() for c in crews})
+            await ctx.send(f"No cached crew matching `{crew}`. Known: "
+                           + ", ".join(f"`{c}`" for c in crews_seen[:15]))
+            return
+
+        resolved, _ = resolve_slayer_targets()
+        daily_total = len(resolved)
+        daily_names = {r["name"].lower() for r in resolved}
+
+        # Per account: daily-missing count, prime-missing count.
+        rows = []
+        fully_done = 0
+        agg_daily_missing = 0
+        agg_prime_missing = 0
+        for name, rec in accounts.items():
+            slayed = {s.lower() for s in rec.get("slayed", [])}
+            daily_missing = [n for n in daily_names if n not in slayed]
+            prime_missing = rec.get("primes_missing", [])
+            dm, pm = len(daily_missing), len(prime_missing)
+            agg_daily_missing += dm
+            agg_prime_missing += pm
+            if dm == 0 and pm == 0:
+                fully_done += 1
+            rows.append((name, rec.get("level", 0), dm, pm))
+
+        n = len(rows)
+        # Sort: most-needy first (daily missing, then prime missing).
+        rows.sort(key=lambda r: (-(r[2] + r[3]), r[0].lower()))
+
+        embed = discord.Embed(
+            title=f"🗡️ Slayer overview — {matched_crew}",
+            color=discord.Color.gold())
+        embed.add_field(name="Accounts", value=str(n), inline=True)
+        embed.add_field(name="Fully done", value=f"{fully_done} ✅", inline=True)
+        embed.add_field(name="Need something", value=str(n - fully_done), inline=True)
+        embed.add_field(name="Total daily gods still needed (crew)",
+                        value=str(agg_daily_missing), inline=True)
+        embed.add_field(name="Total primes still needed (crew)",
+                        value=str(agg_prime_missing), inline=True)
+        embed.add_field(name="\u200b", value="\u200b", inline=True)
+
+        # Show the neediest accounts (those with anything missing), capped for readability.
+        needy = [r for r in rows if (r[2] + r[3]) > 0]
+        if needy:
+            lines = [f"**{name}** (L{lvl}) — {dm} daily, {pm} prime"
+                     for name, lvl, dm, pm in needy[:25]]
+            buf = ""
+            for ln in lines:
+                if len(buf) + len(ln) + 1 > 1024:
+                    embed.add_field(name="Needs work", value=buf, inline=False); buf = ""
+                buf += ln + "\n"
+            if buf.strip():
+                embed.add_field(name="Needs work" if not any(f.name=="Needs work" for f in embed.fields) else "Needs work (cont.)",
+                                value=buf, inline=False)
+            if len(needy) > 25:
+                embed.add_field(name="\u200b", value=f"…and {len(needy)-25} more accounts need work.", inline=False)
+        else:
+            embed.add_field(name="Status", value="✅ Entire crew is fully slayed!", inline=False)
+        embed.set_footer(text=f"Server {matched_sid} · daily set = {daily_total} gods · "
+                              f"read from cache (run !slayer-sweep to refresh)")
+        await ctx.send(embed=embed)
+
     @commands.command(name="slayer-sweep", hidden=True)
     async def slayer_sweep(self, ctx):
         """Manually trigger the God-Slayer status sweep now (instead of waiting for
