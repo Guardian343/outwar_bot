@@ -411,9 +411,12 @@ class CharacterCommands(commands.Cog):
         not_trained   = []  # name
         not_maxed     = []  # name
 
-        # Use persistent MD state first — only network-poll for unknowns
-        md_state = db.get_md_state()
-        now_ts   = datetime.now().timestamp() if 'datetime' in dir() else __import__('datetime').datetime.now().timestamp()
+        # The MANUAL !check-md is an explicit "what's the REAL state right now" request,
+        # so it always polls the game live. (The cache-first path is only for the autoboss
+        # loop's efficiency.) This avoids reporting a stale "ready" from a timer when the
+        # actual game state changed underneath us — e.g. skills were reset in-game, which
+        # nothing tells the cached md_state about.
+        now_ts   = __import__('datetime').datetime.now().timestamp()
 
         async def _check(t):
             suid = t.get("suid")
@@ -421,23 +424,7 @@ class CharacterCommands(commands.Cog):
                 not_trained.append(t["name"])
                 return
 
-            record = md_state.get(str(suid))
-            if record and record.get("cast_at"):
-                from cogs.boss_raid_commands import md_status_from_cast, MD_ACTIVE_SECS
-                status, ready_at = md_status_from_cast(record["cast_at"], now_ts)
-                if status == "active":
-                    secs_left = int((record["cast_at"] + MD_ACTIVE_SECS) - now_ts)
-                    active_list.append({"name": t["name"], "secs": max(0, secs_left)})
-                    return
-                if status == "ready":
-                    ready_list.append(t["name"])
-                    return
-                if status == "cooldown":
-                    secs_remaining = int(ready_at - now_ts)
-                    cooldown_list.append({"name": t["name"], "secs": max(0, secs_remaining)})
-                    return
-
-            # No record — poll network
+            # Always poll the game — no cache shortcut for the manual command.
             try:
                 self.session._session.cookie_jar.update_cookies(
                     {"ow_userid": str(suid)}, response_url=SIGIL
