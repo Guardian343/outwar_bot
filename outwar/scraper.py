@@ -2013,9 +2013,13 @@ def parse_teleport_destination(rollover_html: str):
     """If an item's rollover describes a teleporter, return (destination, kind)
     where kind is 'reusable' or 'consumable'; else (None, None). Name-agnostic —
     keys on the destination sentence, which comes in two phrasings:
-      reusable   -> 'Activate to warp to the <Area> of ...'   (permanent, no cost)
-      consumable -> 'Teleports you to the <Area>.'            (one-time key, DEPLETES)
-    The bot should only ever auto-use reusables; consumables are reserved."""
+      'Activate to warp to the <Area> of ...'
+      'Teleports you to the <Area>.'
+    IMPORTANT: both phrasings are REUSABLE. A before/after backpack count (firing 31
+    teleporters and comparing key quantities — all 104 unchanged) proved that even the
+    'Teleports you to...' items are NOT consumed on use. The earlier assumption that
+    that phrasing meant one-time-use was wrong for this game, so both map to 'reusable'.
+    (Kept the two-branch structure in case a genuinely-consumable phrasing turns up.)"""
     import re
     text = BeautifulSoup(rollover_html, "lxml").get_text(" ", strip=True)
     m = re.search(r"[Aa]ctivate to warp to (?:the\s+)?(.+?)(?:\s+of the\s+|\.|$)", text)
@@ -2023,7 +2027,8 @@ def parse_teleport_destination(rollover_html: str):
         return m.group(1).strip(), "reusable"
     m = re.search(r"[Tt]eleports you to (?:the\s+)?(.+?)\.", text)
     if m:
-        return m.group(1).strip(), "consumable"
+        # Proven reusable by the count test — was previously mislabelled 'consumable'.
+        return m.group(1).strip(), "reusable"
     return None, None
 
 
