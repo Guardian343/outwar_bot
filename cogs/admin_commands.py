@@ -869,15 +869,11 @@ class AdminCommands(commands.Cog):
         if not matches:
             await ctx.send(f"🔎 No teleporter matching `{tele_name}`. See `!teleporters`.")
             return
-        if len(matches) > 1:
-            # Show ids so an ambiguous name can be fired by id, and hint at the de-duper.
-            lines = "\n".join(f"`#{iid}` — {t.get('name')} "
-                              f"(room {t.get('room') or '?'})" for iid, t in matches[:10])
-            await ctx.send(f"🔎 `{tele_name}` matches {len(matches)} entries:\n{lines}\n"
-                           f"Fire a specific one with `!tele-fire {account} #<id>`, or run "
-                           f"`!teleporters-clean` — these may be duplicate KB entries.")
-            return
+        # Duplicate-name entries (per-account item instances) all go to the SAME place,
+        # so for firing/mapping we just use the first match. If it errors as "not owned",
+        # the raw response will tell us and we try another id.
         item_id, trec = matches[0]
+        dup_note = f" _(1 of {len(matches)} same-named entries)_" if len(matches) > 1 else ""
 
         # Resolve account → suid.
         t = next((x for x in db.get_trustees()
@@ -887,23 +883,45 @@ class AdminCommands(commands.Cog):
             return
         suid = t["suid"]
 
-        await ctx.send(f"🧪 Firing **{trec.get('name')}** (item {item_id}) on **{account}**…\n"
+        await ctx.send(f"🧪 Firing **{trec.get('name')}** on **{account}**{dup_note}…\n"
                        f"_This activates a real item — watch what happens in-game._")
 
-        # Fire the activate request. jQuery sends itemids as an array → itemids[]=id.
-        try:
-            raw = await self.session.post_as(
-                "ajax/backpack_action.php",
-                {"action": "activate", "itemids[]": str(item_id)},
-                suid,
-            )
-        except Exception as e:
-            await ctx.send(f"⚠️ Request error: `{e}`")
+        # Try each same-named entry in turn — the KB may hold copies belonging to other
+        # accounts (different item ids), and only the one THIS account owns will fire.
+        # Stop at the first that doesn't come back with a "not owned"/error response.
+        raw = None
+        fired_id = None
+        last_err = None
+        for cand_id, _crec in matches:
+            try:
+                resp = await self.session.post_as(
+                    "ajax/backpack_action.php",
+                    {"action": "activate", "itemids[]": str(cand_id)},
+                    suid,
+                )
+            except Exception as e:
+                last_err = str(e)
+                continue
+            # crude ownership check: an error response means this id isn't usable here.
+            low = (resp or "").lower()
+            if '"error"' in low and ('not' in low and ('own' in low or 'found' in low or 'have' in low)):
+                last_err = resp[:200]
+                continue
+            raw = resp
+            fired_id = cand_id
+            break
+
+        if raw is None:
+            await ctx.send(f"⚠️ None of the {len(matches)} `{trec.get('name')}` entries fired "
+                           f"successfully for **{account}**. Last response/error:\n"
+                           f"```\n{(last_err or 'unknown')[:400]}\n```\n"
+                           f"(This account may not own this teleporter.)")
             return
+        item_id = fired_id
 
         # Show the raw response verbatim — this is the whole point of the test.
         snippet = raw[:1500] if raw else "(empty response)"
-        await ctx.send(f"**Raw response:**\n```\n{snippet}\n```")
+        await ctx.send(f"**Raw response** (item {fired_id}):\n```\n{snippet}\n```")
 
         # Try to parse it as the JSON the JS expects (status / error / redirectTo).
         try:
