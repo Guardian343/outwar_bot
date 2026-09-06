@@ -40,16 +40,23 @@ class HealthMonitor(commands.Cog):
     @tasks.loop(minutes=1)
     async def health_loop(self):
         """Post critical errors to log channel."""
-        # Check for consecutive raid failures
-        if self._raid_fails >= 3:
-            channel_id = db.get_alert_channel("log")
-            channel    = self.bot.get_channel(channel_id) if channel_id else None
-            if channel:
-                await channel.send(
-                    f"🔴 **AutoBoss alert:** {self._raid_fails} consecutive raid failures. "
-                    f"Raids may have stalled — check `!boss-status`."
-                )
-            self._raid_fails = 0  # Reset to avoid spam
+        try:
+            # Check for consecutive raid failures
+            if self._raid_fails >= 3:
+                channel_id = db.get_alert_channel("log")
+                channel    = self.bot.get_channel(channel_id) if channel_id else None
+                if channel:
+                    await channel.send(
+                        f"🔴 **AutoBoss alert:** {self._raid_fails} consecutive raid failures. "
+                        f"Raids may have stalled — check `!boss-status`."
+                    )
+                self._raid_fails = 0  # Reset to avoid spam
+        except Exception as e:
+            try:
+                from outwar import logger
+                logger.error("HEALTH", f"health_loop error (loop continues): {e}")
+            except Exception:
+                pass
 
     @health_loop.before_loop
     async def before_health(self):

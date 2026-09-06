@@ -167,17 +167,23 @@ class GodMonitor(commands.Cog):
 
     @tasks.loop(minutes=1)
     async def god_poll_loop(self):
-        now = datetime.now(timezone.utc)
-        minute = now.minute
-        # Poll at :00/:30, or at :01/:31 as a catch-up if the previous minute was missed
-        if minute not in (0, 1, 30, 31):
-            return
-        # Don't poll twice for the same half-hour window
-        half = now.replace(second=0, microsecond=0, minute=0 if minute < 30 else 30)
-        if self._last_god_poll == half:
-            return
-        self._last_god_poll = half
-        await self._poll_gods()
+        # A tasks.loop that raises an UNCAUGHT exception STOPS permanently (no reschedule),
+        # which would silently kill polling for the rest of an unattended run. Wrap the
+        # whole body so the loop always survives to the next tick.
+        try:
+            now = datetime.now(timezone.utc)
+            minute = now.minute
+            # Poll at :00/:30, or at :01/:31 as a catch-up if the previous minute was missed
+            if minute not in (0, 1, 30, 31):
+                return
+            # Don't poll twice for the same half-hour window
+            half = now.replace(second=0, microsecond=0, minute=0 if minute < 30 else 30)
+            if self._last_god_poll == half:
+                return
+            self._last_god_poll = half
+            await self._poll_gods()
+        except Exception as e:
+            logger.error("GOD_MONITOR", f"god_poll_loop tick error (loop continues): {e}")
 
     @god_poll_loop.before_loop
     async def before_god_poll(self):
@@ -209,7 +215,10 @@ class GodMonitor(commands.Cog):
     @tasks.loop(hours=6)
     async def session_check_loop(self):
         """Check all stored sessions every 6 hours and DM owner if any have expired."""
-        await self._check_sessions()
+        try:
+            await self._check_sessions()
+        except Exception as e:
+            logger.error("GOD_MONITOR", f"session_check_loop error (loop continues): {e}")
 
     @session_check_loop.before_loop
     async def before_session_check(self):
@@ -284,11 +293,14 @@ class GodMonitor(commands.Cog):
     @tasks.loop(minutes=1)
     async def daily_summary_loop(self):
         # Fire at 09:00 UK time (UTC+0 winter / UTC+1 summer)
-        import pytz
-        uk_tz  = pytz.timezone("Europe/London")
-        now_uk = datetime.now(uk_tz)
-        if now_uk.hour == 9 and now_uk.minute == 0:
-            await self._post_daily_summary()
+        try:
+            import pytz
+            uk_tz  = pytz.timezone("Europe/London")
+            now_uk = datetime.now(uk_tz)
+            if now_uk.hour == 9 and now_uk.minute == 0:
+                await self._post_daily_summary()
+        except Exception as e:
+            logger.error("GOD_MONITOR", f"daily_summary_loop error (loop continues): {e}")
 
     @daily_summary_loop.before_loop
     async def before_daily_summary(self):
