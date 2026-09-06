@@ -95,6 +95,42 @@ class OutwarSession:
         self._relogin_max_in_window = 5      # >this many in the window → trip the breaker
         self._relogin_breaker_until = None   # datetime; while set + future, re-login is paused
         self._relogin_breaker_backoff_secs = 300  # how long to pause when the breaker trips
+        # --- Reachability tracking: consecutive connection failures (timeout/client/
+        #     connection errors — i.e. Outwar unreachable, NOT logged-out). Lets a
+        #     monitor detect "site is down" and "site is back" transitions so an outage
+        #     during unattended running gets alerted and recovers cleanly.
+        self._consecutive_conn_fails = 0
+        self._reachable = True               # current best-guess reachability
+        self._last_success_at = None         # datetime of last successful request
+
+    def _note_request_ok(self):
+        """Call on any successful request — resets the connection-failure streak AND
+        clears any stuck recovery latches. This is the fix for the 'OW came back but
+        the bot stayed broken until a manual restart' bug: if the session got wedged
+        during an outage (logged-out latch set, or circuit breaker tripped) and OW then
+        returned, a genuine success now fully un-wedges it — no restart needed."""
+        from datetime import datetime, timezone
+        self._consecutive_conn_fails = 0
+        self._reachable = True
+        self._last_success_at = datetime.now(timezone.utc)
+        # Clear stuck recovery state — a real success means the session IS working.
+        if self._known_logged_out:
+            self._known_logged_out = False
+        if self._relogin_breaker_until is not None:
+            self._relogin_breaker_until = None
+            self._relogin_times = []
+
+    def _note_conn_fail(self):
+        """Call on a timeout / client / connection error (Outwar unreachable). After a
+        few in a row we consider the site down; a monitor reads is_reachable()."""
+        self._consecutive_conn_fails += 1
+        if self._consecutive_conn_fails >= 3:
+            self._reachable = False
+
+    def is_reachable(self) -> bool:
+        """Best-guess: is Outwar currently reachable? False after ~3 consecutive
+        connection failures; True again on the next success."""
+        return self._reachable
         # Direct logged-out signal: set True the moment a genuine logged-out page is
         # seen, cleared on a successful (re)login. is_healthy() reads this so it can
         # report unhealthy on the FIRST sign of trouble — WITHOUT waiting for the
@@ -521,6 +557,7 @@ class OutwarSession:
                     self._known_logged_out = False
 
                 if self._is_ajax_or_partial_success(html, path):
+                    self._note_request_ok()
                     return RequestResult(
                         status=RequestStatus.SUCCESS,
                         html=html,
@@ -531,6 +568,7 @@ class OutwarSession:
                 # positives from normal Outwar pages that contain marketing
                 # meta tags or layout/ad CSS in the header.
                 if self._is_logged_in_page(html):
+                    self._note_request_ok()
                     return RequestResult(
                         status=RequestStatus.SUCCESS,
                         html=html,
@@ -554,6 +592,7 @@ class OutwarSession:
 
             except asyncio.TimeoutError:
                 last_error = "timeout"
+                self._note_conn_fail()
 
                 if is_action:
                     logger.warning("SESSION", f"Action timeout, not retried: {method} {url}")
@@ -566,6 +605,7 @@ class OutwarSession:
 
             except aiohttp.ClientError as e:
                 last_error = str(e)
+                self._note_conn_fail()
 
                 if is_action:
                     logger.warning("SESSION", f"Action client error, not retried: {method} {url}: {e}")

@@ -118,6 +118,10 @@ class GodMonitor(commands.Cog):
         # repost so it notifies without cluttering). Tracks which fired this cycle.
         self._envoy_alert_thresholds = [("1d", 86400), ("1h", 3600)]
         self._envoy_alert_msg_id = None
+        # Outwar-reachability alerting: track transitions so an outage during unattended
+        # running gets ONE "site down" alert and ONE "site back" alert (not a flood).
+        self._outwar_was_reachable = True
+        self._last_self_heal = None   # throttle for the wedged-session self-heal re-login
 
     @property
     def session(self):
@@ -189,6 +193,83 @@ class GodMonitor(commands.Cog):
     async def before_god_poll(self):
         await self.bot.wait_until_ready()
 
+    async def _check_outwar_reachable(self):
+        """Alert once when Outwar becomes unreachable, and once when it recovers.
+        Uses the session's connection-failure tracking (is_reachable). This is the
+        fix for the 'site went down, bot didn't notice or recover' scenario — the
+        crash-proofed loops now keep polling through an outage, and when the site
+        returns the next successful request flips is_reachable() back to True, so
+        polling resumes automatically with no manual restart needed."""
+        sess = self.session
+        if not hasattr(sess, "is_reachable"):
+            return
+        reachable = sess.is_reachable()
+        if reachable == self._outwar_was_reachable:
+            return   # no transition
+        self._outwar_was_reachable = reachable
+        # Resolve an alert channel (log → summary → owner DM).
+        ch = None
+        for key in ("log", "summary"):
+            try:
+                cid = db.get_alert_channel(key)
+            except Exception:
+                cid = None
+            if cid:
+                ch = self.bot.get_channel(int(cid))
+                if ch:
+                    break
+        if reachable:
+            msg = ("🟢 **Outwar is reachable again.** Polling/raiding has resumed "
+                   "automatically — no restart needed.")
+            logger.info("GOD_MONITOR", "Outwar reachable again — resumed.")
+        else:
+            msg = ("🔴 **Outwar appears to be DOWN / unreachable** (repeated connection "
+                   "failures). The bot will keep retrying and resume automatically when "
+                   "the site returns — no action needed.")
+            logger.warning("GOD_MONITOR", "Outwar unreachable — alerting.")
+        try:
+            if ch:
+                await ch.send(msg)
+        except Exception:
+            pass
+
+    async def _self_heal_if_wedged(self):
+        """Safety net for the 'OW back up but bot stuck until restart' bug. If the
+        session reports unhealthy (a stuck logged-out latch or tripped breaker) YET
+        connections are getting through (reachable), force a fresh re-login to clear
+        the wedge — the thing a manual restart used to do. Throttled so it can't loop."""
+        sess = self.session
+        if not (hasattr(sess, "is_healthy") and hasattr(sess, "is_reachable")):
+            return
+        try:
+            unhealthy = not sess.is_healthy()
+            reachable = sess.is_reachable()
+        except Exception:
+            return
+        # Wedged == unhealthy but the site IS reachable (so it's stuck state, not an
+        # outage). Force a re-login to clear it.
+        if unhealthy and reachable:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            last = getattr(self, "_last_self_heal", None)
+            if last and (now - last).total_seconds() < 300:
+                return   # throttle: at most once per 5 min
+            self._last_self_heal = now
+            logger.warning("GOD_MONITOR",
+                           "Session wedged (unhealthy but reachable) — forcing re-login "
+                           "to self-heal without a restart.")
+            try:
+                if hasattr(sess, "_do_login"):
+                    await sess._do_login()
+                    # clear stuck latches directly too
+                    if hasattr(sess, "_known_logged_out"):
+                        sess._known_logged_out = False
+                    if hasattr(sess, "_relogin_breaker_until"):
+                        sess._relogin_breaker_until = None
+                    logger.info("GOD_MONITOR", "Self-heal re-login succeeded.")
+            except Exception as e:
+                logger.error("GOD_MONITOR", f"Self-heal re-login failed: {e}")
+
     @tasks.loop(minutes=1)
     async def boss_poll_loop(self):
         # Heartbeat FIRST — write a liveness beat every minute before doing any
@@ -204,6 +285,17 @@ class GodMonitor(commands.Cog):
             except Exception:
                 healthy = None
             status_writer.publish_heartbeat(healthy=healthy)
+        except Exception:
+            pass
+        # Outwar-reachability alerting — detect down/recovered transitions and alert once.
+        try:
+            await self._check_outwar_reachable()
+        except Exception:
+            pass
+        # Self-heal: if the session is wedged (unhealthy but site reachable), force a
+        # re-login — clears the stuck state that used to need a manual restart.
+        try:
+            await self._self_heal_if_wedged()
         except Exception:
             pass
         await self._poll_bosses()
