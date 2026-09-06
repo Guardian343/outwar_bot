@@ -70,6 +70,22 @@ class PrimeWatcher(commands.Cog):
         self._started = False
         self._timing_log = []   # silent rolling buffer of recent prime-raid timings (!pw-timing)
 
+    def _record_raid_timing(self, raid_cog, god_name, squad_size, won):
+        """Capture the last prime-raid's wall-time into the silent rolling buffer for
+        !pw timing. Called after BOTH _do_god_raid paths (open-pool and closed-group).
+        Fails silently — timing must never disrupt raiding."""
+        try:
+            secs = getattr(raid_cog, "_last_god_raid_secs", None)
+            if secs is not None:
+                self._timing_log.append({
+                    "god": god_name, "secs": round(secs, 1),
+                    "squad": squad_size, "won": bool(won),
+                    "at": datetime.now().strftime("%H:%M"),
+                })
+                self._timing_log = self._timing_log[-50:]
+        except Exception:
+            pass
+
     @commands.Cog.listener()
     async def on_ready(self):
         # Start the scheduler once the bot is connected (loop is running here).
@@ -1002,19 +1018,7 @@ class PrimeWatcher(commands.Cog):
                                                g.get("pot_groups") or [], channel)
                     won, dmg, rnote = await raid_cog._do_god_raid(None, god, squad)
                     attempts += 1
-                    # Record raid wall-time into a silent rolling buffer for !pw-timing.
-                    try:
-                        secs = getattr(raid_cog, "_last_god_raid_secs", None)
-                        if secs is not None:
-                            self._timing_log.append({
-                                "god": st["god"], "secs": round(secs, 1),
-                                "squad": len(squad), "won": bool(won),
-                                "at": datetime.now().strftime("%H:%M"),
-                            })
-                            # keep only the most recent 50 entries
-                            self._timing_log = self._timing_log[-50:]
-                    except Exception:
-                        pass
+                    self._record_raid_timing(raid_cog, st["god"], len(squad), won)
                     if won:
                         got += 1
                     else:
@@ -1076,6 +1080,7 @@ class PrimeWatcher(commands.Cog):
                         )
                         break  # a member capped out -> fall back to next group
                     won, dmg, rnote = await raid_cog._do_god_raid(None, god, trustees)
+                    self._record_raid_timing(raid_cog, st["god"], len(trustees), won)
 
                     # Categorise the "not won" outcome — three distinct behaviours:
                     #   RAGE failure  → skip this PRIME entirely for the cycle. Rage
