@@ -71,18 +71,17 @@ class PrimeWatcher(commands.Cog):
         self._timing_log = []   # silent rolling buffer of recent prime-raid timings (!pw-timing)
 
     def _record_raid_timing(self, raid_cog, god_name, squad_size, won):
-        """Capture the last prime-raid's wall-time into the silent rolling buffer for
-        !pw timing. Called after BOTH _do_god_raid paths (open-pool and closed-group).
-        Fails silently — timing must never disrupt raiding."""
+        """Capture the last prime-raid's wall-time and PERSIST it to disk (survives
+        restarts — essential for collecting data over long unattended periods). Called
+        after BOTH _do_god_raid paths. Fails silently — timing must never disrupt raiding."""
         try:
             secs = getattr(raid_cog, "_last_god_raid_secs", None)
             if secs is not None:
-                self._timing_log.append({
+                db.append_prime_timing({
                     "god": god_name, "secs": round(secs, 1),
                     "squad": squad_size, "won": bool(won),
-                    "at": datetime.now().strftime("%H:%M"),
+                    "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 })
-                self._timing_log = self._timing_log[-50:]
         except Exception:
             pass
 
@@ -163,33 +162,40 @@ class PrimeWatcher(commands.Cog):
 
     @primewatcher.command(name="timing")
     async def pw_timing(self, ctx):
-        """Show recent prime-raid timings (silent rolling buffer, no channel noise
-        otherwise). A permanent diagnostic — if a future change alters how primewatcher
-        moves/raids, this shows whether raid times shifted. Reads memory only."""
+        """Show recent prime-raid timings — PERSISTED to disk, survives restarts.
+        Silent by default (no channel noise). A permanent diagnostic: if a future change
+        alters how primewatcher moves/raids, this shows whether raid times shifted."""
         import discord
-        log = getattr(self, "_timing_log", [])
+        log = db.get_prime_timings()
         if not log:
             await ctx.send("No prime-raid timings recorded yet. They accumulate silently "
-                           "as primewatcher runs its hourly cycles — check back after a cycle.")
+                           "as primewatcher runs its hourly cycles — check back after a cycle "
+                           "that actually raids a spawned prime.")
             return
         secs = [e["secs"] for e in log if e.get("secs") is not None]
         avg = sum(secs) / len(secs) if secs else 0
         fastest = min(secs) if secs else 0
         slowest = max(secs) if secs else 0
+        won_ct = sum(1 for e in log if e.get("won"))
+        # date span of the collected data
+        ts_all = [e.get("ts") or e.get("at") for e in log if e.get("ts") or e.get("at")]
+        span = f"{ts_all[0]} → {ts_all[-1]}" if ts_all else "—"
         embed = discord.Embed(title="⏱️ Primewatcher raid timings",
                               color=discord.Color.blurple())
         embed.add_field(name="Samples", value=str(len(log)), inline=True)
         embed.add_field(name="Avg / raid", value=f"{avg:.1f}s", inline=True)
         embed.add_field(name="Fastest / slowest", value=f"{fastest:.1f}s / {slowest:.1f}s", inline=True)
+        embed.add_field(name="Wins", value=f"{won_ct}/{len(log)}", inline=True)
+        embed.add_field(name="Data span", value=span, inline=False)
         # last ~15 individual raids, most recent first
         lines = []
         for e in reversed(log[-15:]):
             w = "✅" if e.get("won") else "✗"
-            lines.append(f"{e.get('at','?')} {w} {e.get('god','?')[:24]} — "
+            when = (e.get("ts","")[-8:] if e.get("ts") else e.get("at","?"))
+            lines.append(f"{when} {w} {str(e.get('god','?'))[:22]} — "
                          f"{e.get('secs','?')}s ({e.get('squad','?')} accts)")
         embed.add_field(name="Recent raids", value="\n".join(lines) or "—", inline=False)
-        embed.set_footer(text="Silent by default · buffer holds last 50 raids · memory-only "
-                              "(clears on bot restart)")
+        embed.set_footer(text="Persisted to disk · survives restarts · holds last 1000 raids")
         await ctx.send(embed=embed)
 
     @primewatcher.command(name="help")

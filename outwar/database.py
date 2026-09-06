@@ -656,6 +656,38 @@ def _write_dict(filename: str, data: dict):
 
 
 # ---------------------------------------------------------------------------
+# Prime-raid timing log — persisted so it survives bot restarts (a memory-only
+# buffer would lose everything on any restart, which is useless for collecting
+# data over a long unattended period). Kept as a rolling list on disk.
+# ---------------------------------------------------------------------------
+_PRIME_TIMING_FILE = "prime_timings.json"
+_PRIME_TIMING_MAX = 1000   # ~6 weeks of hourly raids; plenty to analyse
+
+def get_prime_timings() -> list:
+    path = _db_path(_PRIME_TIMING_FILE)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            return json.loads(content) if content else []
+    except Exception:
+        return []
+
+def append_prime_timing(entry: dict):
+    """Append one raid-timing record and persist, trimming to the rolling max."""
+    log = get_prime_timings()
+    log.append(entry)
+    log = log[-_PRIME_TIMING_MAX:]
+    try:
+        with open(_db_path(_PRIME_TIMING_FILE), "w", encoding="utf-8") as f:
+            json.dump(log, f, indent=2)
+    except Exception:
+        pass
+    return log
+
+
+# ---------------------------------------------------------------------------
 # God-Slayer status cache — a daily snapshot of each account's slayed/missing
 # gods, refreshed by a 3am sweep so slayer runs (and !slayer-status) can read it
 # instantly instead of fetching every account's God Slayer page live.
