@@ -70,16 +70,31 @@ class PrimeWatcher(commands.Cog):
         self._started = False
         self._timing_log = []   # silent rolling buffer of recent prime-raid timings (!pw-timing)
 
-    def _record_raid_timing(self, raid_cog, god_name, squad_size, won):
+    def _record_raid_timing(self, raid_cog, god_name, squad_size, won, note=None):
         """Capture the last prime-raid's wall-time and PERSIST it to disk (survives
         restarts — essential for collecting data over long unattended periods). Called
-        after BOTH _do_god_raid paths. Fails silently — timing must never disrupt raiding."""
+        after BOTH _do_god_raid paths. Fails silently — timing must never disrupt raiding.
+        `note` is the outcome reason (e.g. 'not spawned', 'low rage', a loss/win), used to
+        classify raids in !pw timing so real raids can be told apart from not-spawned bails."""
         try:
             secs = getattr(raid_cog, "_last_god_raid_secs", None)
             if secs is not None:
+                # Classify the outcome into a coarse kind for filtering/stats.
+                nl = (note or "").lower()
+                if won:
+                    kind = "win"
+                elif "not spawned" in nl:
+                    kind = "not_spawned"
+                elif "capped" in nl or "could not form" in nl or "full" in nl:
+                    kind = "capped"
+                elif "rage" in nl or "under-strength" in nl or "power" in nl:
+                    kind = "underpowered"
+                else:
+                    kind = "loss"
                 db.append_prime_timing({
                     "god": god_name, "secs": round(secs, 1),
                     "squad": squad_size, "won": bool(won),
+                    "kind": kind, "note": (note or "")[:80],
                     "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 })
         except Exception:
@@ -163,39 +178,62 @@ class PrimeWatcher(commands.Cog):
     @primewatcher.command(name="timing")
     async def pw_timing(self, ctx):
         """Show recent prime-raid timings — PERSISTED to disk, survives restarts.
-        Silent by default (no channel noise). A permanent diagnostic: if a future change
-        alters how primewatcher moves/raids, this shows whether raid times shifted."""
+        Splits raids by outcome (win / loss / underpowered / capped / not-spawned) so
+        you can see the REAL raid picture as you optimise crews/groups, not one blended
+        average dominated by fast 'not spawned' checks."""
         import discord
         log = db.get_prime_timings()
         if not log:
             await ctx.send("No prime-raid timings recorded yet. They accumulate silently "
-                           "as primewatcher runs its hourly cycles — check back after a cycle "
-                           "that actually raids a spawned prime.")
+                           "as primewatcher runs its hourly cycles.")
             return
-        secs = [e["secs"] for e in log if e.get("secs") is not None]
-        avg = sum(secs) / len(secs) if secs else 0
-        fastest = min(secs) if secs else 0
-        slowest = max(secs) if secs else 0
-        won_ct = sum(1 for e in log if e.get("won"))
-        # date span of the collected data
-        ts_all = [e.get("ts") or e.get("at") for e in log if e.get("ts") or e.get("at")]
+
+        # Bucket by kind. Older records (pre-classification) have no 'kind' → infer.
+        buckets = {"win": [], "loss": [], "underpowered": [], "capped": [], "not_spawned": []}
+        for e in log:
+            k = e.get("kind")
+            if not k:
+                k = "win" if e.get("won") else "loss"   # legacy records
+            buckets.setdefault(k, []).append(e)
+
+        def _avg(entries):
+            s = [x["secs"] for x in entries if x.get("secs") is not None]
+            return (sum(s) / len(s)) if s else 0
+
+        n = len(log)
+        wins = len(buckets["win"])
+        # "Real raids" = ones that actually engaged (not the not-spawned bails).
+        real = buckets["win"] + buckets["loss"] + buckets["underpowered"] + buckets["capped"]
+        ts_all = [e.get("ts") for e in log if e.get("ts")]
         span = f"{ts_all[0]} → {ts_all[-1]}" if ts_all else "—"
+
         embed = discord.Embed(title="⏱️ Primewatcher raid timings",
                               color=discord.Color.blurple())
-        embed.add_field(name="Samples", value=str(len(log)), inline=True)
-        embed.add_field(name="Avg / raid", value=f"{avg:.1f}s", inline=True)
-        embed.add_field(name="Fastest / slowest", value=f"{fastest:.1f}s / {slowest:.1f}s", inline=True)
-        embed.add_field(name="Wins", value=f"{won_ct}/{len(log)}", inline=True)
+        embed.add_field(name="Total samples", value=str(n), inline=True)
+        embed.add_field(name="Real raids", value=str(len(real)), inline=True)
+        embed.add_field(name="Not-spawned bails", value=str(len(buckets["not_spawned"])), inline=True)
+        # Win rate among REAL raids (the meaningful denominator, not the bails).
+        wr = (wins / len(real) * 100) if real else 0
+        embed.add_field(name="Wins", value=f"{wins} ({wr:.0f}% of real raids)", inline=True)
+        embed.add_field(name="Avg real raid", value=f"{_avg(real):.1f}s", inline=True)
+        embed.add_field(name="Avg win", value=f"{_avg(buckets['win']):.1f}s", inline=True)
+        # Outcome breakdown
+        breakdown = " · ".join(
+            f"{k.replace('_',' ')}: {len(v)}" for k, v in buckets.items() if v)
+        embed.add_field(name="Outcome breakdown", value=breakdown or "—", inline=False)
         embed.add_field(name="Data span", value=span, inline=False)
-        # last ~15 individual raids, most recent first
+        # last ~12 REAL raids (skip the not-spawned noise in the recent list)
+        recent_real = [e for e in log if (e.get("kind") or ("win" if e.get("won") else "loss")) != "not_spawned"]
         lines = []
-        for e in reversed(log[-15:]):
-            w = "✅" if e.get("won") else "✗"
-            when = (e.get("ts","")[-8:] if e.get("ts") else e.get("at","?"))
-            lines.append(f"{when} {w} {str(e.get('god','?'))[:22]} — "
+        for e in reversed(recent_real[-12:]):
+            k = e.get("kind") or ("win" if e.get("won") else "loss")
+            icon = {"win":"✅","loss":"✗","underpowered":"💪","capped":"🚫"}.get(k, "·")
+            when = e.get("ts","")[-8:] if e.get("ts") else "?"
+            lines.append(f"{when} {icon} {str(e.get('god','?'))[:20]} — "
                          f"{e.get('secs','?')}s ({e.get('squad','?')} accts)")
-        embed.add_field(name="Recent raids", value="\n".join(lines) or "—", inline=False)
-        embed.set_footer(text="Persisted to disk · survives restarts · holds last 1000 raids")
+        embed.add_field(name="Recent REAL raids", value="\n".join(lines) or "—", inline=False)
+        embed.set_footer(text="Persisted · survives restarts · holds last 1000 · "
+                              "not-spawned bails excluded from win-rate & recent list")
         await ctx.send(embed=embed)
 
     @primewatcher.command(name="help")
@@ -1024,7 +1062,7 @@ class PrimeWatcher(commands.Cog):
                                                g.get("pot_groups") or [], channel)
                     won, dmg, rnote = await raid_cog._do_god_raid(None, god, squad)
                     attempts += 1
-                    self._record_raid_timing(raid_cog, st["god"], len(squad), won)
+                    self._record_raid_timing(raid_cog, st["god"], len(squad), won, rnote)
                     if won:
                         got += 1
                     else:
@@ -1086,7 +1124,7 @@ class PrimeWatcher(commands.Cog):
                         )
                         break  # a member capped out -> fall back to next group
                     won, dmg, rnote = await raid_cog._do_god_raid(None, god, trustees)
-                    self._record_raid_timing(raid_cog, st["god"], len(trustees), won)
+                    self._record_raid_timing(raid_cog, st["god"], len(trustees), won, rnote)
 
                     # Categorise the "not won" outcome — three distinct behaviours:
                     #   RAGE failure  → skip this PRIME entirely for the cycle. Rage
