@@ -1418,6 +1418,12 @@ class RaidCommands(commands.Cog):
         import time as _pw_time
         _pw_t0 = _pw_time.monotonic()
 
+        # Movement tracking (read-only instrumentation — does NOT change navigation).
+        # Accumulated by _navigate_to_god per account so !pw timing can show what
+        # fraction of raids involve walking vs accounts already at the god, and how far.
+        # This is the data that will tell us whether teleporter routing is worth building.
+        self._last_raid_movement = {"already_there": 0, "walked": 0, "total_hops": 0, "max_hops": 0}
+
         # Sort by rage descending — try highest rage first as former
         sorted_trustees = sorted(trustees, key=lambda t: t.get("rage", 0), reverse=True)
         if not sorted_trustees:
@@ -1533,6 +1539,10 @@ class RaidCommands(commands.Cog):
 
                             if cur_room == room_id:
                                 room_reached = True
+                                try:
+                                    self._last_raid_movement["already_there"] += 1
+                                except Exception:
+                                    pass
                                 for mob in loc.get("roomDetailsNew", []):
                                     if mob.get("type") == 1:   # god mob present in room
                                         god_seen = True
@@ -1551,6 +1561,18 @@ class RaidCommands(commands.Cog):
                                 return
 
                             path = find_path(cur_room, room_id)
+                            # Record movement: this account had to walk (hops = len-1).
+                            try:
+                                hops = max(0, len(path) - 1)
+                                if hops > 0:
+                                    self._last_raid_movement["walked"] += 1
+                                    self._last_raid_movement["total_hops"] += hops
+                                    if hops > self._last_raid_movement["max_hops"]:
+                                        self._last_raid_movement["max_hops"] = hops
+                                else:
+                                    self._last_raid_movement["already_there"] += 1
+                            except Exception:
+                                pass
                             last = cur_room
                             last_data = None
                             for step in path[1:]:

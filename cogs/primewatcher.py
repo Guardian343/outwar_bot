@@ -95,6 +95,7 @@ class PrimeWatcher(commands.Cog):
                     "god": god_name, "secs": round(secs, 1),
                     "squad": squad_size, "won": bool(won),
                     "kind": kind, "note": (note or "")[:80],
+                    "move": getattr(raid_cog, "_last_raid_movement", None),
                     "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 })
         except Exception:
@@ -217,6 +218,33 @@ class PrimeWatcher(commands.Cog):
         embed.add_field(name="Wins", value=f"{wins} ({wr:.0f}% of real raids)", inline=True)
         embed.add_field(name="Avg real raid", value=f"{_avg(real):.1f}s", inline=True)
         embed.add_field(name="Avg win", value=f"{_avg(buckets['win']):.1f}s", inline=True)
+
+        # --- Movement stats (the data that gates whether teleporter routing is worth it) ---
+        # Across real raids that recorded movement: how many involved ANY walking, and
+        # how far on average. If most raids are "already there", teleporter routing is
+        # low-value; if most walk far, it's clearly worth building.
+        moved_raids = 0; nomove_raids = 0; hop_samples = []
+        for e in real:
+            mv = e.get("move")
+            if not mv:
+                continue
+            walked = mv.get("walked", 0)
+            if walked > 0:
+                moved_raids += 1
+                # avg hops per walking account in this raid
+                th = mv.get("total_hops", 0)
+                hop_samples.append(th / walked if walked else 0)
+            else:
+                nomove_raids += 1
+        if moved_raids or nomove_raids:
+            tot = moved_raids + nomove_raids
+            pct_moved = (moved_raids / tot * 100) if tot else 0
+            avg_hops = (sum(hop_samples) / len(hop_samples)) if hop_samples else 0
+            embed.add_field(
+                name="Movement (real raids w/ data)",
+                value=(f"{moved_raids} walked / {nomove_raids} already-there "
+                       f"({pct_moved:.0f}% needed movement) · avg {avg_hops:.0f} hops/acct when walking"),
+                inline=False)
         # Outcome breakdown
         breakdown = " · ".join(
             f"{k.replace('_',' ')}: {len(v)}" for k, v in buckets.items() if v)
