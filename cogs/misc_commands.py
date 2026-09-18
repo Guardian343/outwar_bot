@@ -41,6 +41,99 @@ class MiscCommands(commands.Cog):
     def session(self):
         return self.bot.outwar
 
+    @commands.command(name="bot-report", aliases=["botreport", "report", "state"])
+    async def report_cmd(self, ctx):
+        """Comprehensive one-command snapshot of the bot's state — session health,
+        data-collection stats, watchers, uptime. Designed so a single paste shows the
+        whole picture (a 'bring the state to the co-worker' bridge, not per-command copying)."""
+        import discord, datetime as _dt
+        sess = self.session
+        e = discord.Embed(title="🤖 DeathBot — State Report",
+                          color=discord.Color.dark_teal(),
+                          timestamp=_dt.datetime.now(_dt.timezone.utc))
+
+        # --- Session / connectivity health ---
+        try:
+            healthy = sess.is_healthy() if hasattr(sess, "is_healthy") else None
+            reachable = sess.is_reachable() if hasattr(sess, "is_reachable") else None
+            conn_fails = getattr(sess, "_consecutive_conn_fails", "?")
+            last_ok = getattr(sess, "_last_success_at", None)
+            relogins = len(getattr(sess, "_relogin_times", []) or [])
+            breaker = getattr(sess, "_relogin_breaker_until", None)
+            last_ok_s = last_ok.strftime("%Y-%m-%d %H:%M:%SZ") if last_ok else "—"
+            sess_val = (
+                f"Reachable: {'🟢 yes' if reachable else '🔴 NO' if reachable is False else '?'}\n"
+                f"Healthy: {'🟢 yes' if healthy else '🔴 no' if healthy is False else '?'}\n"
+                f"Consecutive conn-fails: {conn_fails}\n"
+                f"Recent re-logins: {relogins}"
+                + ("  ⚠️ breaker TRIPPED" if breaker else "") + "\n"
+                f"Last successful request: {last_ok_s}"
+            )
+        except Exception as ex:
+            sess_val = f"(error reading session: {ex})"
+        e.add_field(name="🌐 Session / Connectivity", value=sess_val, inline=False)
+
+        # --- Accounts / servers ---
+        try:
+            trustees = db.get_trustees()
+            servers = db.get_active_servers()
+            with_suid = sum(1 for t in trustees if t.get("suid"))
+            e.add_field(name="👥 Accounts",
+                        value=f"{len(trustees)} trustees ({with_suid} with suid) · "
+                              f"{len(servers)} active server(s)", inline=False)
+        except Exception as ex:
+            e.add_field(name="👥 Accounts", value=f"(error: {ex})", inline=False)
+
+        # --- Data collection: prime timings ---
+        try:
+            timings = db.get_prime_timings()
+            if timings:
+                real = [t for t in timings if (t.get("kind") or ("win" if t.get("won") else "loss")) != "not_spawned"]
+                wins = sum(1 for t in timings if t.get("won"))
+                have_move = sum(1 for t in real if t.get("move"))
+                span = (f"{timings[0].get('ts','?')} → {timings[-1].get('ts','?')}") if timings else "—"
+                e.add_field(name="⏱️ Prime timing data",
+                            value=f"{len(timings)} samples ({len(real)} real raids, {wins} wins)\n"
+                                  f"Movement data on: {have_move} raids\n"
+                                  f"Span: {span}\n`!pw timing` for detail", inline=False)
+            else:
+                e.add_field(name="⏱️ Prime timing data", value="none yet", inline=False)
+        except Exception as ex:
+            e.add_field(name="⏱️ Prime timing data", value=f"(error: {ex})", inline=False)
+
+        # --- Slayer status cache ---
+        try:
+            cache = db.get_slayer_status_cache()
+            n_acc = sum(len(accs) for crews in cache.values() for accs in crews.values()) if cache else 0
+            # find most recent 'updated'
+            updates = [rec.get("updated") for crews in cache.values() for accs in crews.values()
+                       for rec in accs.values() if rec.get("updated")]
+            last_sweep = max(updates) if updates else "—"
+            e.add_field(name="🗡️ Slayer status cache",
+                        value=f"{n_acc} accounts cached · last sweep: {last_sweep}"
+                              + ("" if n_acc else " (run !slayer-sweep)"), inline=False)
+        except Exception as ex:
+            e.add_field(name="🗡️ Slayer status cache", value=f"(error: {ex})", inline=False)
+
+        # --- Active watchers / raiding ---
+        try:
+            pw = self.bot.get_cog("PrimeWatcher")
+            gm = self.bot.get_cog("GodMonitor")
+            br = self.bot.get_cog("BossRaidCommands")
+            bits = []
+            if pw is not None:
+                bits.append(f"PrimeWatcher: {'running' if getattr(pw,'_started',False) else 'idle'}")
+            if br is not None:
+                bits.append(f"AutoBoss: {'ACTIVE' if getattr(br,'_running',False) else 'idle'}")
+            if gm is not None:
+                bits.append("GodMonitor: loaded")
+            e.add_field(name="⚙️ Systems", value=" · ".join(bits) or "—", inline=False)
+        except Exception as ex:
+            e.add_field(name="⚙️ Systems", value=f"(error: {ex})", inline=False)
+
+        e.set_footer(text="One-command state snapshot — paste this to share the whole picture.")
+        await ctx.send(embed=e)
+
     @commands.command(name="bot-suid", hidden=True)
     async def botsuid_cmd(self, ctx, server: str = None, suid: int = None):
         """OWNER: view or set the bot account's suid for a server. The same account
