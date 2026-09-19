@@ -268,8 +268,71 @@ class PrimeWatcher(commands.Cog):
         embed.set_footer(text="Real raids only (not-spawned caught pre-flight) · "
                               "legacy untagged records excluded from stats")
         await ctx.send(embed=embed)
-        embed.set_footer(text="Persisted · survives restarts · holds last 1000 · "
-                              "not-spawned bails excluded from win-rate & recent list")
+
+    @primewatcher.command(name="movement")
+    async def pw_movement(self, ctx):
+        """Per-god movement breakdown — which primes are walk-heavy vs 'already there'.
+        Slices the SAME timing records per god (no new data collected) so we can see
+        WHERE movement cost concentrates, not just one blended average. This is the
+        actionable view for deciding which gods teleporter-routing would actually help."""
+        import discord
+        log = db.get_prime_timings()
+        # Only classified raids that carry movement data.
+        rows = [e for e in log if e.get("kind") and e.get("move")]
+        if not rows:
+            await ctx.send("No per-god movement data yet — it accumulates as classified "
+                           "raids run. Check back once `!pw timing` shows classified raids.")
+            return
+
+        # Aggregate per god.
+        per_god = {}
+        for e in rows:
+            g = e.get("god", "?")
+            mv = e["move"]
+            d = per_god.setdefault(g, {"raids": 0, "walked": 0, "hop_sum": 0.0,
+                                       "max_hops": 0})
+            d["raids"] += 1
+            if mv.get("walked", 0) > 0:
+                d["walked"] += 1
+                w = mv["walked"]
+                d["hop_sum"] += mv.get("total_hops", 0) / w   # avg hops/acct this raid
+                d["max_hops"] = max(d["max_hops"], mv.get("max_hops", 0))
+
+        # Rank: walk-heaviest first (by % of raids needing movement, then avg hops).
+        def _key(item):
+            d = item[1]
+            pct = d["walked"] / d["raids"] if d["raids"] else 0
+            avg = d["hop_sum"] / d["walked"] if d["walked"] else 0
+            return (-(pct), -(avg))
+        ranked = sorted(per_god.items(), key=_key)
+
+        embed = discord.Embed(title="🚶 Per-god movement",
+                              color=discord.Color.teal())
+        embed.description = ("How often each prime's raids needed walking, and how far. "
+                             "Walk-heavy gods (top) are where teleporter routing would help most.")
+        lines = []
+        for god, d in ranked[:25]:
+            pct = (d["walked"] / d["raids"] * 100) if d["raids"] else 0
+            avg = (d["hop_sum"] / d["walked"]) if d["walked"] else 0
+            if d["walked"] == 0:
+                lines.append(f"🟢 **{god[:24]}** — always already-there ({d['raids']} raids)")
+            else:
+                lines.append(f"🚶 **{god[:24]}** — {pct:.0f}% walked · "
+                             f"avg {avg:.0f} hops · max {d['max_hops']} ({d['raids']} raids)")
+        # chunk to field limits
+        buf = ""
+        for ln in lines:
+            if len(buf) + len(ln) + 1 > 1024:
+                embed.add_field(name="\u200b", value=buf, inline=False); buf = ""
+            buf += ln + "\n"
+        if buf.strip():
+            embed.add_field(name="\u200b", value=buf, inline=False)
+
+        # Overall summary line for context.
+        tot_raids = sum(d["raids"] for _, d in per_god.items())
+        tot_walked = sum(d["walked"] for _, d in per_god.items())
+        embed.set_footer(text=f"{len(per_god)} gods · {tot_walked}/{tot_raids} raids needed "
+                              f"movement overall · slices existing !pw timing data")
         await ctx.send(embed=embed)
 
     @primewatcher.command(name="help")
