@@ -2049,38 +2049,42 @@ class RaidCommands(commands.Cog):
         async def _fetch(t):
             suid = t.get("suid")
             if not suid:
-                return t["name"], 0, 0
-            try:
-                async with semaphore:
-                    html = await self.session.get_as("home", suid)
-                used, max_cap = parse_god_cap(html)
-                avail = (max_cap - used) if max_cap else 0
-                # Live rage is on the SAME toolbar/home page we just fetched for caps.
-                # Read it here and update the trustee in-place so downstream rage checks
-                # (pre-flight + join filter) use LIVE rage, not the stale value stored in
-                # the trustee DB (which doesn't reflect rage drained by boss raids since
-                # the group was last scraped). Caps are already live; this makes rage match.
-                try:
-                    t["rage"] = parse_rage(html)
+                return t["name"], 0, 0, False   # no suid → treat as unavailable
+            for _attempt in range(2):   # one retry — a transient bad read shouldn't
+                try:                    # let a possibly-capped account slip through
+                    async with semaphore:
+                        html = await self.session.get_as("home", suid)
+                    used, max_cap = parse_god_cap(html)
+                    try:
+                        t["rage"] = parse_rage(html)
+                    except Exception:
+                        pass
+                    if max_cap:   # got a real cap reading
+                        avail = max_cap - used
+                        return t["name"], avail, max_cap, True
+                    # max_cap == 0 → cap text not found (bad/partial page). Retry once.
                 except Exception:
                     pass
-                return t["name"], avail, max_cap
-            except Exception:
-                return t["name"], 0, 0
+                await asyncio.sleep(0.4)
+            # Couldn't read caps after retry → FAIL CLOSED: report unreadable so the
+            # caller skips this account rather than assume it's available (the old
+            # behaviour skilled/raided capped accounts whose read hiccupped).
+            return t["name"], 0, 0, False
 
         results = await asyncio.gather(*[_fetch(t) for t in trustees])
-        # cap_map values are (available, max) read straight off the toolbar.
-        cap_map = {name: (cur, max_cap) for name, cur, max_cap in results}
+        # cap_map: name -> (available, max, read_ok)
+        cap_map = {name: (cur, mx, ok) for name, cur, mx, ok in results}
 
-        # Toolbar = AVAILABLE/MAX. Available to raid when max unknown (0) or available > 0.
-        available = [t for t in trustees if cap_map.get(t["name"], (0, 0))[1] == 0 or
-                     cap_map.get(t["name"], (0, 0))[0] > 0]
+        # Available ONLY when we got a good read AND caps remain (>0). An unreadable
+        # cap (read_ok False) is treated as NOT available — fail closed.
+        available = [t for t in trustees
+                     if cap_map.get(t["name"], (0, 0, False))[2]        # read_ok
+                     and cap_map.get(t["name"], (0, 0, False))[0] > 0]  # avail > 0
         capped    = [t for t in trustees if t not in available]
 
-        # Each account needs at least required_caps caps AVAILABLE (the first number directly).
+        # Each account needs at least required_caps caps AVAILABLE.
         enough = [t for t in available
-                  if cap_map.get(t["name"], (0, 0))[1] == 0 or
-                  cap_map.get(t["name"], (0, 0))[0] >= required_caps]
+                  if cap_map.get(t["name"], (0, 0, False))[0] >= required_caps]
 
         if len(enough) < len(trustees) - len(capped):
             low_cap = [t["name"] for t in available if t not in enough]

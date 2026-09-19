@@ -1125,8 +1125,31 @@ class PrimeWatcher(commands.Cog):
                     continue
                 avail, capped, err = await raid_cog._check_group_caps(trustees, 1)
                 if capped:
-                    gi += 1   # a member is capped -> fall back to next group
+                    gi += 1   # a member is capped -> fall back to next group (no skilling)
                     continue
+                # RAGE GATE (before skilling): _check_group_caps just fetched LIVE rage
+                # into each trustee. Per spec: if ANY account lacks the join-rage
+                # requirement, skip the WHOLE group — no skilling, no raiding.
+                # NOTE: this is a FIRST-PASS gate on the join threshold only. It does NOT
+                # yet account for the rage that SKILLING itself drains (skill costs) — a
+                # follow-on build adds skill-cost-aware checking. For now it catches
+                # accounts already below the join threshold before any skilling.
+                try:
+                    god_db = db.get_prime_god(god_name) or {}
+                    _rage_req = god_db.get("rage_to_join", 0) or god_db.get("rage_to_form", 0) or 0
+                except Exception:
+                    _rage_req = 0
+                if _rage_req:
+                    _low = [t for t in trustees if int(t.get("rage", 0) or 0) < _rage_req]
+                    if _low:
+                        st["note"] = (f"low rage (<{_rage_req} join): "
+                                      + ", ".join(t.get("name","?") for t in _low[:4])
+                                      + ("…" if len(_low) > 4 else ""))
+                        logger.info("PRIMEWATCHER",
+                                    f"{god_name}: {gname} skipped pre-skill — "
+                                    f"{len(_low)} account(s) below join-rage {_rage_req}")
+                        gi += 1
+                        continue
                 if gname not in groups_used:
                     groups_used.append(gname)
 
