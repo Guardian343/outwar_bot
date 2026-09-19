@@ -178,62 +178,66 @@ class PrimeWatcher(commands.Cog):
 
     @primewatcher.command(name="timing")
     async def pw_timing(self, ctx):
-        """Show recent prime-raid timings — PERSISTED to disk, survives restarts.
-        Splits raids by outcome (win / loss / underpowered / capped / not-spawned) so
-        you can see the REAL raid picture as you optimise crews/groups, not one blended
-        average dominated by fast 'not spawned' checks."""
+        """Show prime-raid outcomes — PERSISTED, survives restarts. Only CLASSIFIED
+        raids (recorded since outcome-tagging was added) count toward the stats; older
+        un-tagged records are set aside as 'unclassified' rather than guessed, so the
+        win-rate and averages are trustworthy. Not-spawned gods are caught in pre-flight
+        and never recorded here — this is real raids only."""
         import discord
         log = db.get_prime_timings()
         if not log:
-            await ctx.send("No prime-raid timings recorded yet. They accumulate silently "
-                           "as primewatcher runs its hourly cycles.")
+            await ctx.send("No prime-raid timings recorded yet. They accumulate as "
+                           "primewatcher runs its hourly cycles.")
             return
 
-        # Bucket by kind. Older records (pre-classification) have no 'kind' → infer.
+        # Split classified (have a real 'kind') from legacy (no 'kind' → outcome unknown).
+        classified = [e for e in log if e.get("kind")]
+        legacy = [e for e in log if not e.get("kind")]
+
         buckets = {"win": [], "loss": [], "underpowered": [], "capped": [], "not_spawned": []}
-        for e in log:
-            k = e.get("kind")
-            if not k:
-                k = "win" if e.get("won") else "loss"   # legacy records
-            buckets.setdefault(k, []).append(e)
+        for e in classified:
+            buckets.setdefault(e["kind"], []).append(e)
 
         def _avg(entries):
             s = [x["secs"] for x in entries if x.get("secs") is not None]
             return (sum(s) / len(s)) if s else 0
 
-        n = len(log)
-        wins = len(buckets["win"])
-        # "Real raids" = ones that actually engaged (not the not-spawned bails).
+        # "Real raids" = classified raids that actually engaged. (not_spawned won't appear
+        # here anyway since it's caught pre-flight, but exclude defensively.)
         real = buckets["win"] + buckets["loss"] + buckets["underpowered"] + buckets["capped"]
+        wins = len(buckets["win"])
         ts_all = [e.get("ts") for e in log if e.get("ts")]
         span = f"{ts_all[0]} → {ts_all[-1]}" if ts_all else "—"
 
-        embed = discord.Embed(title="⏱️ Primewatcher raid timings",
+        embed = discord.Embed(title="⏱️ Primewatcher raid outcomes",
                               color=discord.Color.blurple())
-        embed.add_field(name="Total samples", value=str(n), inline=True)
-        embed.add_field(name="Real raids", value=str(len(real)), inline=True)
-        embed.add_field(name="Not-spawned bails", value=str(len(buckets["not_spawned"])), inline=True)
-        # Win rate among REAL raids (the meaningful denominator, not the bails).
+
+        if not real and legacy:
+            embed.description = (f"All {len(legacy)} stored records pre-date outcome "
+                                 f"tagging — no classified raids yet. Stats will populate "
+                                 f"as new cycles run; old records roll off the 1000-buffer.")
+            embed.add_field(name="Data span", value=span, inline=False)
+            await ctx.send(embed=embed)
+            return
+
+        embed.add_field(name="Classified raids", value=str(len(real)), inline=True)
         wr = (wins / len(real) * 100) if real else 0
-        embed.add_field(name="Wins", value=f"{wins} ({wr:.0f}% of real raids)", inline=True)
+        embed.add_field(name="Wins", value=f"{wins} ({wr:.0f}%)", inline=True)
+        if legacy:
+            embed.add_field(name="Legacy (untagged)", value=f"{len(legacy)} set aside", inline=True)
         embed.add_field(name="Avg real raid", value=f"{_avg(real):.1f}s", inline=True)
         embed.add_field(name="Avg win", value=f"{_avg(buckets['win']):.1f}s", inline=True)
+        embed.add_field(name="Avg loss", value=f"{_avg(buckets['loss']):.1f}s", inline=True)
 
-        # --- Movement stats (the data that gates whether teleporter routing is worth it) ---
-        # Across real raids that recorded movement: how many involved ANY walking, and
-        # how far on average. If most raids are "already there", teleporter routing is
-        # low-value; if most walk far, it's clearly worth building.
+        # --- Movement stats (gates the teleporter-routing decision) ---
         moved_raids = 0; nomove_raids = 0; hop_samples = []
         for e in real:
             mv = e.get("move")
             if not mv:
                 continue
-            walked = mv.get("walked", 0)
-            if walked > 0:
+            if mv.get("walked", 0) > 0:
                 moved_raids += 1
-                # avg hops per walking account in this raid
-                th = mv.get("total_hops", 0)
-                hop_samples.append(th / walked if walked else 0)
+                hop_samples.append(mv.get("total_hops", 0) / mv["walked"])
             else:
                 nomove_raids += 1
         if moved_raids or nomove_raids:
@@ -241,25 +245,29 @@ class PrimeWatcher(commands.Cog):
             pct_moved = (moved_raids / tot * 100) if tot else 0
             avg_hops = (sum(hop_samples) / len(hop_samples)) if hop_samples else 0
             embed.add_field(
-                name="Movement (real raids w/ data)",
+                name="Movement (raids w/ data)",
                 value=(f"{moved_raids} walked / {nomove_raids} already-there "
-                       f"({pct_moved:.0f}% needed movement) · avg {avg_hops:.0f} hops/acct when walking"),
+                       f"({pct_moved:.0f}% needed movement) · "
+                       f"avg {avg_hops:.0f} hops/acct when walking"),
                 inline=False)
-        # Outcome breakdown
-        breakdown = " · ".join(
-            f"{k.replace('_',' ')}: {len(v)}" for k, v in buckets.items() if v)
+
+        breakdown = " · ".join(f"{k.replace('_',' ')}: {len(v)}"
+                               for k, v in buckets.items() if v)
         embed.add_field(name="Outcome breakdown", value=breakdown or "—", inline=False)
         embed.add_field(name="Data span", value=span, inline=False)
-        # last ~12 REAL raids (skip the not-spawned noise in the recent list)
-        recent_real = [e for e in log if (e.get("kind") or ("win" if e.get("won") else "loss")) != "not_spawned"]
+
+        # Recent list: only CLASSIFIED raids, with correct icons (no blank/guessed ones).
         lines = []
-        for e in reversed(recent_real[-12:]):
-            k = e.get("kind") or ("win" if e.get("won") else "loss")
-            icon = {"win":"✅","loss":"✗","underpowered":"💪","capped":"🚫"}.get(k, "·")
+        for e in reversed(classified[-12:]):
+            icon = {"win":"✅","loss":"✗","underpowered":"💪","capped":"🚫",
+                    "not_spawned":"💤"}.get(e.get("kind"), "·")
             when = e.get("ts","")[-8:] if e.get("ts") else "?"
             lines.append(f"{when} {icon} {str(e.get('god','?'))[:20]} — "
                          f"{e.get('secs','?')}s ({e.get('squad','?')} accts)")
-        embed.add_field(name="Recent REAL raids", value="\n".join(lines) or "—", inline=False)
+        embed.add_field(name="Recent raids", value="\n".join(lines) or "—", inline=False)
+        embed.set_footer(text="Real raids only (not-spawned caught pre-flight) · "
+                              "legacy untagged records excluded from stats")
+        await ctx.send(embed=embed)
         embed.set_footer(text="Persisted · survives restarts · holds last 1000 · "
                               "not-spawned bails excluded from win-rate & recent list")
         await ctx.send(embed=embed)
